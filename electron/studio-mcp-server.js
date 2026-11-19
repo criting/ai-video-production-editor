@@ -154,7 +154,7 @@ const rpcError = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, me
 const INSTRUCTIONS = [
   'These tools operate the AI Video Production Editor that is open on this machine. Everything you change is saved in the open project and shows up in the editor immediately, so the user can watch and take over.',
   'Start with project_get_overview. Project Space tools (project_*) read and write the script, story bible, world, cast/locations/props (references) and storyboard shots; project_open_phase shows a phase to the user.',
-  'The open project belongs to the user: if it already has content and they did not ask you to change it, start your own with project_new (it saves and closes theirs first).',
+  'The open project belongs to the user: keep working in it with the project_* tools. Only call project_new when the user explicitly asks for a new/empty project, and then pass confirmCloseOpenProject: true (it saves and closes theirs first).',
   'To attach media you made elsewhere, pass an https URL, a data URL or a local file path (imagePath / videoPath).',
   'Generation tools spend the user\'s provider credits; say what you are about to generate before large batches.',
   'Prefer these tools over editing project files on disk.',

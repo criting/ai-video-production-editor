@@ -465,8 +465,15 @@ export const PROJECT_AGENT_TOOL_DECLARATIONS = [
   },
   {
     name: 'project_new',
-    description: 'Start a new, empty project: the open project is saved and closed first. Use this before writing a new script, world or storyboard unless the user asked you to work in the open project. Pass folderPath to save the new project right away.',
-    parameters: { type: 'object', properties: { folderPath: str('Folder for the new project (absolute path or ~/…).'), name: str('Project name.') } },
+    description: 'Start a new, empty project: the open project is saved and closed first. Only use this when the user explicitly asked for a new/empty project — never as a prelude to generating into an already-open project. When an open project has content (or a folder), you must pass confirmCloseOpenProject: true. Pass folderPath to save the new project right away.',
+    parameters: {
+      type: 'object',
+      properties: {
+        folderPath: str('Folder for the new project (absolute path or ~/…).'),
+        name: str('Project name.'),
+        confirmCloseOpenProject: { type: 'boolean', description: 'Required true when an open project has content or a folder; confirms saving and closing it first.' },
+      },
+    },
   },
   {
     name: 'project_list_outfit_models',
@@ -757,7 +764,9 @@ export const createProjectAgentExecutor = (ctx: ProjectAgentContext): Record<str
         editor: { workspace: s.activeWorkspace, phase: s.activePhase },
         hint: [
           s.projectPath ? 'Changes autosave to the project file.' : 'The project is not saved to a folder yet (project_save with a folderPath).',
-          (bible.script?.trim() || s.references.length || s.shotPrompts.length) ? 'This is the user\'s open project with content: only change it if they asked you to; otherwise use project_new.' : null,
+          (bible.script?.trim() || s.references.length || s.shotPrompts.length)
+            ? 'This is the user\'s open project with content: keep working in it. Only use project_new with confirmCloseOpenProject: true if they explicitly asked to start a new/empty project.'
+            : null,
         ].filter(Boolean).join(' '),
       };
     },
@@ -926,6 +935,17 @@ export const createProjectAgentExecutor = (ctx: ProjectAgentContext): Record<str
 
     project_new: async (args: Record<string, unknown>) => {
       const before = state();
+      const hasOpenContent = Boolean(
+        before.projectPath
+        || before.storyBible.script?.trim()
+        || before.references.length
+        || before.shotPrompts.length,
+      );
+      if (hasOpenContent && args.confirmCloseOpenProject !== true) {
+        throw new Error(
+          'An open project already has content (or a folder). Keep working in it with the project_* tools. Only call project_new with confirmCloseOpenProject: true when the user explicitly asked to start a new/empty project (it saves and closes theirs first).',
+        );
+      }
       await ctx.newProject();
       pending = {};
       const folder = asString(args.folderPath);

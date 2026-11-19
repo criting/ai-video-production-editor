@@ -64,7 +64,7 @@ renderer; `folderPath` gets `~` expanded. Edits go through the history stacks, s
 
 ## Safety and visibility
 
-- The open project belongs to the user. The server instructions and `project_get_overview` (`hasContent`) tell agents to start their own project with `project_new` unless asked to edit the open one.
+- The open project belongs to the user. The server instructions and `project_get_overview` (`hasContent`) tell agents to keep working in the open project. `project_new` only runs when the user explicitly asks for a new/empty project, and then requires `confirmCloseOpenProject: true` (it saves and closes the open one first).
 - Every call shows up in the Activity center as "Claude Code · Writing shots" (client name from the MCP `initialize`, kept per session; the stdio bridge forwards the session id).
 - Errors the Project Hub would only show in its banner are returned to the agent.
 
