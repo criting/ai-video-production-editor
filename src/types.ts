@@ -29,6 +29,7 @@ export type Workspace =
   | 'MOODBOARD'
   | 'PLUGINS'
   | 'LOCAL_AI'
+  | 'WORKFLOW_MANAGER'
   | 'TEAM'
   | 'NOTEBOOKLM';
 

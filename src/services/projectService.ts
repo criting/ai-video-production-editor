@@ -26,7 +26,9 @@ import {
   SceneMapState,
   SceneWallState,
 } from '../types';
+import type { ProductionHierarchy } from '../types/productionHierarchy';
 import { NamingTokens, renderNamingTemplate } from '../utils/naming';
+import { ensureProductionHierarchy, writeActiveEpisodeFromFlat } from './productionHierarchy';
 
 type ProjectSnapshot = {
   storyBible: StoryBible;
@@ -45,6 +47,8 @@ type ProjectSnapshot = {
   projectHub?: {
     shotPrompts: ShotPrompt[];
   };
+  /** Series → Season → Episode hierarchy (additive; dual-writes with projectHub). */
+  productionHierarchy?: ProductionHierarchy | null;
   reviewData?: ReviewData;
   namingTemplates?: NamingTemplate[];
   usageLedger?: UsageLedger;
@@ -140,6 +144,8 @@ type ProjectFile = {
   moduleExtras?: Record<string, unknown>;
   waveformCache: WaveformCache;
   projectHub?: ProjectHubRecord;
+  /** Additive episodic hierarchy. Older projects omit it and are migrated on load. */
+  productionHierarchy?: ProductionHierarchy | null;
   reviewData?: ReviewData;
   namingTemplates?: NamingTemplate[];
   usageLedger?: UsageLedger;
@@ -171,6 +177,7 @@ type ProjectLoadResult = {
   projectHub?: {
     shotPrompts: ShotPrompt[];
   };
+  productionHierarchy?: ProductionHierarchy | null;
   reviewData?: ReviewData;
   namingTemplates?: NamingTemplate[];
   usageLedger?: UsageLedger;
@@ -1231,6 +1238,28 @@ export const saveProjectToFolder = async (folderPath: string, snapshot: ProjectS
     return next;
   })();
 
+  const shotPromptsForHierarchy = snapshot.projectHub?.shotPrompts || [];
+  const productionHierarchy = (() => {
+    const ensured = ensureProductionHierarchy(snapshot.productionHierarchy, {
+      storyBible: snapshot.storyBible,
+      shotPrompts: shotPromptsForHierarchy,
+      sceneWall: snapshot.sceneWall,
+      projectName,
+    });
+    return writeActiveEpisodeFromFlat(
+      {
+        ...ensured,
+        series: {
+          ...ensured.series,
+          title: ensured.series.title || projectName,
+        },
+      },
+      snapshot.storyBible.script || '',
+      shotPromptsForHierarchy,
+      snapshot.sceneWall,
+    );
+  })();
+
   const projectFile: ProjectFile = {
     version: 2,
     name: projectName,
@@ -1247,6 +1276,7 @@ export const saveProjectToFolder = async (folderPath: string, snapshot: ProjectS
     moduleExtras: snapshot.moduleExtras && Object.keys(snapshot.moduleExtras).length ? snapshot.moduleExtras : undefined,
     waveformCache: snapshot.waveformCache,
     projectHub,
+    productionHierarchy,
     reviewData,
     namingTemplates: snapshot.namingTemplates,
     usageLedger: snapshot.usageLedger,
@@ -1431,6 +1461,16 @@ export const loadProjectFromFolder = async (folderPath: string) => {
     }
     : project.designCanvas;
 
+  const productionHierarchy = ensureProductionHierarchy(
+    (project as ProjectLoadResult).productionHierarchy,
+    {
+      storyBible: storyBible || project.storyBible,
+      shotPrompts: projectHub?.shotPrompts || [],
+      sceneWall: project.sceneWall,
+      projectName: project.name,
+    },
+  );
+
   return {
     ...project,
     storyBible,
@@ -1440,6 +1480,7 @@ export const loadProjectFromFolder = async (folderPath: string) => {
     references,
     avatars,
     projectHub,
+    productionHierarchy,
     reviewData,
     namingTemplates: project.namingTemplates,
     designCanvas,

@@ -7635,3 +7635,102 @@ button:focus:not(:focus-visible) { outline: none; }
 body[data-theme="light"] .app-button.app-primary, body[data-theme="light"] .app-button.app-primary:hover,
 .studio-workspace .app-button.app-primary, .project-hub .app-button.app-primary, .page-shell .app-button.app-primary { color: #fff; }
 .app-button.app-primary svg { color: inherit; }
+
+/* Episode navigator (Series → Season → Episode) */
+.episode-nav {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--shell-hairline);
+  border-radius: var(--radius-md);
+  background: rgb(var(--app-panel-rgb) / 0.55);
+  margin-bottom: 0.75rem;
+}
+.episode-nav--empty { color: var(--app-muted); font-size: 0.8rem; }
+.episode-nav__context { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.5rem; font-size: 0.82rem; }
+.episode-nav__series { font-weight: 650; }
+.episode-nav__sep { color: var(--app-muted); }
+.episode-nav__meta { margin-left: auto; color: var(--app-muted); font-size: 0.72rem; }
+.episode-nav__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }
+.episode-nav__label { font-size: 0.72rem; color: var(--app-muted); }
+.episode-nav__select, .episode-nav__input {
+  min-height: 2rem;
+  border: 1px solid var(--shell-hairline);
+  border-radius: 0.45rem;
+  background: rgb(var(--app-bg-rgb) / 0.55);
+  color: inherit;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+}
+.episode-nav__btn {
+  min-height: 2rem;
+  border: 1px solid var(--shell-hairline);
+  border-radius: 0.45rem;
+  background: transparent;
+  color: inherit;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.episode-nav__btn--primary { background: var(--app-accent); border-color: transparent; color: #fff; }
+.episode-nav__add { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+
+/* ComfyUI Workflow Manager */
+.workflow-manager { display: grid; gap: 1.25rem; padding: 1rem 1.25rem 2rem; max-width: 72rem; margin: 0 auto; }
+.workflow-manager__header { display: grid; gap: 0.35rem; }
+.workflow-manager__title { margin: 0; font-size: 1.25rem; font-weight: 650; letter-spacing: -0.02em; }
+.workflow-manager__subtitle { margin: 0; color: var(--app-muted); max-width: 42rem; line-height: 1.45; font-size: 0.88rem; }
+.workflow-manager__section { display: grid; gap: 0.7rem; padding: 0.9rem 1rem; border: 1px solid var(--shell-hairline); border-radius: var(--radius-md); background: rgb(var(--app-panel-rgb) / 0.45); }
+.workflow-manager__section h3 { margin: 0; font-size: 0.95rem; }
+.workflow-manager__section-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.6rem; align-items: center; }
+.workflow-manager__row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.workflow-manager__row input[type="url"],
+.workflow-manager__row input[type="text"],
+.workflow-manager__row select {
+  min-height: 2rem;
+  border: 1px solid var(--shell-hairline);
+  border-radius: 0.45rem;
+  background: rgb(var(--app-bg-rgb) / 0.55);
+  color: inherit;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+  min-width: 12rem;
+}
+.workflow-manager__row button,
+.workflow-manager__file,
+.workflow-manager__section-head > button {
+  min-height: 2rem;
+  border: 1px solid var(--shell-hairline);
+  border-radius: 0.45rem;
+  background: transparent;
+  color: inherit;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.workflow-manager__file { display: inline-flex; align-items: center; }
+.workflow-manager__status { margin: 0; font-size: 0.8rem; color: var(--app-muted); }
+.workflow-manager__status.is-online { color: rgb(34 197 94); }
+.workflow-manager__status.is-offline { color: rgb(248 113 113); }
+.workflow-manager__models { display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.75rem; color: var(--app-muted); }
+.workflow-manager__split { display: grid; grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr); gap: 0.9rem; }
+@media (max-width: 800px) { .workflow-manager__split { grid-template-columns: 1fr; } }
+.workflow-manager__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.35rem; max-height: 22rem; overflow: auto; }
+.workflow-manager__list-item { width: 100%; text-align: left; display: grid; gap: 0.15rem; padding: 0.55rem 0.65rem; border: 1px solid var(--shell-hairline); border-radius: 0.5rem; background: transparent; color: inherit; cursor: pointer; }
+.workflow-manager__list-item span { color: var(--app-muted); font-size: 0.72rem; }
+.workflow-manager__list-item.is-active { border-color: var(--app-accent); background: rgb(var(--app-accent-rgb, 59 130 246) / 0.12); }
+.workflow-manager__detail { display: grid; gap: 0.55rem; align-content: start; font-size: 0.84rem; }
+.workflow-manager__assignments, .workflow-manager__jobs { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.45rem; }
+.workflow-manager__assignments li, .workflow-manager__jobs li {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--shell-hairline);
+  border-radius: 0.5rem;
+  font-size: 0.8rem;
+}
+.workflow-manager__assignments span, .workflow-manager__jobs span { color: var(--app-muted); }
+.workflow-manager__empty { margin: 0; color: var(--app-muted); font-size: 0.8rem; }
+.workflow-manager__error { color: rgb(248 113 113); margin: 0; font-size: 0.78rem; }
+.workflow-manager__ok { color: rgb(34 197 94); margin: 0; font-size: 0.78rem; }
+.workflow-manager__note { margin: 0; color: var(--app-muted); font-size: 0.78rem; line-height: 1.4; }

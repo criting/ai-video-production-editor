@@ -62,6 +62,7 @@ export const WORKSPACE_NAV_GROUPS: WorkspaceNavGroup[] = [
       { id: 'TEAM', name: 'Team', description: 'Collaboration, shared spaces, chat', icon: UserCircleIcon },
       { id: 'PLUGINS', name: 'Plugins', description: 'Install packs, LUTs and host plugins', icon: LayersIcon },
       { id: 'LOCAL_AI', name: 'Local AI', description: 'Run open-weights models and LLMs on your computer', icon: BrainCircuitIcon },
+      { id: 'WORKFLOW_MANAGER', name: 'Workflows', description: 'ComfyUI connection, workflow library, and generation jobs', icon: LayersIcon },
     ],
   },
   {
