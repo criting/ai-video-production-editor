@@ -18679,7 +18679,7 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                                                                     )}
 
                                                                     {!shot.isGenerating && (
-                                                                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-2 items-center justify-center pointer-events-none">
+                                                                        <div className="absolute inset-0 z-20 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col gap-2 items-center justify-center pointer-events-none">
                                                                             {canGenerateStoryboard && (
                                                                                 <button onClick={() => handleGenerateShotImage(shot.shot)} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-6 rounded-full flex items-center gap-2 shadow-lg transform transition-transform hover:scale-110 pointer-events-auto">
                                                                                     <MagicWandIcon className="w-4 h-4" />
@@ -18768,11 +18768,16 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                                                                         </div>
                                                                     )}
 
-                                                                    <div className="absolute top-3 left-3 flex flex-col items-start gap-2">
-                                                                        <div className="bg-black/60 backdrop-blur-md text-white text-xs font-black px-2.5 py-1 rounded-md border border-white/10">
+                                                                    {/* Metadata chips stay under the hover action layer (z-20) and ignore
+                                                                        pointer events so long Director/Cam labels cannot block Generate. */}
+                                                                    <div className="absolute top-3 left-3 z-10 flex max-w-[min(14rem,46%)] flex-col items-start gap-2 pointer-events-none">
+                                                                        <div className="max-w-full truncate bg-black/60 backdrop-blur-md text-white text-xs font-black px-2.5 py-1 rounded-md border border-white/10">
                                                                             SHOT {formatShotLabel(shot)}
                                                                         </div>
-                                                                        <div className="bg-black/60 backdrop-blur-md text-[10px] text-gray-200 px-2.5 py-1 rounded-md border border-white/10">
+                                                                        <div
+                                                                            className="max-w-full truncate bg-black/60 backdrop-blur-md text-[10px] text-gray-200 px-2.5 py-1 rounded-md border border-white/10"
+                                                                            title={`Director: ${(directorPersonas.find((p) => p.id === (shot.directorPersonaOverride || directorPersona)) || directorPersonas[0]).label}`}
+                                                                        >
                                                                             Director: {(directorPersonas.find((p) => p.id === (shot.directorPersonaOverride || directorPersona)) || directorPersonas[0]).label}
                                                                         </div>
                                                                         {(() => {
@@ -18784,30 +18789,33 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                                                                                 lensPresets: LENS_PRESETS,
                                                                             });
                                                                             return (
-                                                                                <div className="bg-black/60 backdrop-blur-md text-[10px] text-gray-200 px-2.5 py-1 rounded-md border border-white/10" title={`Effective camera for generation (${cam.source}${cam.shotLocked ? ', locked' : ''})`}>
+                                                                                <div
+                                                                                    className="max-w-full truncate bg-black/60 backdrop-blur-md text-[10px] text-gray-200 px-2.5 py-1 rounded-md border border-white/10"
+                                                                                    title={`Effective camera for generation (${cam.source}${cam.shotLocked ? ', locked' : ''}): ${cam.cameraLabel} · ${cam.lensLabel}`}
+                                                                                >
                                                                                     Cam: {cam.cameraLabel} · {cam.lensLabel}
                                                                                 </div>
                                                                             );
                                                                         })()}
                                                                         {shot.isStale && (
-                                                                            <div className="bg-amber-500/20 backdrop-blur-md text-[10px] text-amber-100 px-2.5 py-1 rounded-md border border-amber-400/30">
+                                                                            <div className="max-w-full truncate bg-amber-500/20 backdrop-blur-md text-[10px] text-amber-100 px-2.5 py-1 rounded-md border border-amber-400/30" title={(shot.staleReasons || []).join(', ')}>
                                                                                 Outdated{(shot.staleReasons || []).length ? `: ${(shot.staleReasons || []).join(', ')}` : ''}
                                                                             </div>
                                                                         )}
                                                                         {shot.burstFrame && (
-                                                                            <div className="bg-indigo-500/20 backdrop-blur-md text-[10px] text-indigo-100 px-2.5 py-1 rounded-md border border-indigo-400/30" title="Burst Frame is a separate multi-frame filming operation — the storyboard still remains a single frame.">
+                                                                            <div className="max-w-full truncate bg-indigo-500/20 backdrop-blur-md text-[10px] text-indigo-100 px-2.5 py-1 rounded-md border border-indigo-400/30" title="Burst Frame is a separate multi-frame filming operation — the storyboard still remains a single frame.">
                                                                                 Burst Frame (filming override)
                                                                             </div>
                                                                         )}
                                                                         {shotLock && (
-                                                                            <div className="bg-amber-500/15 backdrop-blur-md text-[10px] text-amber-100 px-2.5 py-1 rounded-md border border-amber-400/30">
+                                                                            <div className="max-w-full truncate bg-amber-500/15 backdrop-blur-md text-[10px] text-amber-100 px-2.5 py-1 rounded-md border border-amber-400/30">
                                                                                 Locked by {shotLock.claimedBy.name}
                                                                             </div>
                                                                         )}
                                                                         <button
                                                                             onClick={() => setActiveAngleShotId(prev => prev === shot.shot ? null : shot.shot)}
                                                                             disabled={shot.isGenerating}
-                                                                            className={`text-[10px] font-bold px-2.5 py-1 rounded-md border border-white/10 flex items-center gap-1 ${isAnglePanelOpen ? 'bg-indigo-600 text-white' : 'bg-black/60 text-gray-200 hover:text-white'} disabled:opacity-50 disabled:cursor-not-allowed`}
+                                                                            className={`pointer-events-auto text-[10px] font-bold px-2.5 py-1 rounded-md border border-white/10 flex items-center gap-1 ${isAnglePanelOpen ? 'bg-indigo-600 text-white' : 'bg-black/60 text-gray-200 hover:text-white'} disabled:opacity-50 disabled:cursor-not-allowed`}
                                                                             aria-expanded={isAnglePanelOpen}
                                                                         >
                                                                             <CameraIcon className="w-3 h-3" />
@@ -18816,7 +18824,7 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                                                                         {hasCompare && (
                                                                             <button
                                                                                 onClick={() => openShotCompare(shot)}
-                                                                                className="text-[10px] font-bold px-2.5 py-1 rounded-md border border-white/10 bg-black/60 text-gray-200 hover:text-white"
+                                                                                className="pointer-events-auto text-[10px] font-bold px-2.5 py-1 rounded-md border border-white/10 bg-black/60 text-gray-200 hover:text-white"
                                                                             >
                                                                                 Compare
                                                                             </button>
