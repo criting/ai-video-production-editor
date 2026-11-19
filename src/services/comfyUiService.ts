@@ -1,4 +1,5 @@
 import type { MediaItem } from '../types';
+import { localHttp } from './localLlmService';
 
 type ComfyModelOptions = {
   checkpoints: string[];
@@ -57,12 +58,52 @@ const buildId = () => `comfy-${Date.now()}-${Math.random().toString(16).slice(2)
 
 const normalizeBaseUrl = (url: string) => url.replace(/\/+$/, '');
 
+/**
+ * Prefer the Electron localAi bridge (no browser Origin header).
+ * Newer ComfyUI builds often return 403 Forbidden to renderer fetch()
+ * because of origin / CSRF checks; the main-process bridge avoids that.
+ */
 const fetchJson = async (baseUrl: string, path: string, init?: RequestInit) => {
-  const response = await fetch(`${normalizeBaseUrl(baseUrl)}${path}`, init);
-  if (!response.ok) {
-    throw new Error(`ComfyUI request failed: ${response.status} ${response.statusText}`);
+  const url = `${normalizeBaseUrl(baseUrl)}${path}`;
+  const method = (init?.method || 'GET').toUpperCase();
+  let body: unknown;
+  if (init?.body !== undefined && init.body !== null) {
+    if (typeof init.body === 'string') {
+      try {
+        body = JSON.parse(init.body);
+      } catch {
+        body = init.body;
+      }
+    } else {
+      body = init.body;
+    }
   }
-  return response.json();
+
+  const result = await localHttp(url, {
+    method,
+    body,
+    timeoutMs: method === 'GET' ? 15000 : 120000,
+  });
+
+  let data: any = null;
+  try {
+    data = result.text ? JSON.parse(result.text) : null;
+  } catch {
+    data = null;
+  }
+
+  if (!result.ok) {
+    const detail = data?.error || data?.message || result.text || result.status;
+    const statusLabel = result.status ? `${result.status}` : 'unreachable';
+    let hint = '';
+    if (result.status === 403) {
+      hint = ' ComfyUI rejected the request (403). In the desktop app this should use the local bridge — restart the app after updating. If you still see 403, start ComfyUI with --enable-cors-header (and for LAN access, --listen 0.0.0.0), or disable its security middleware if your build has one.';
+    } else if (!result.status) {
+      hint = ' Is ComfyUI running at this URL?';
+    }
+    throw new Error(`ComfyUI request failed: ${statusLabel}${typeof detail === 'string' && detail !== statusLabel ? ` ${detail}` : ''}.${hint}`);
+  }
+  return data;
 };
 
 const extractChoices = (node: any, field: string): string[] => {

@@ -215,17 +215,30 @@ const dataToBlob = (image: { base64: string; mimeType: string }) => {
 };
 
 const comfyJson = async (baseUrl: string, path: string, init?: RequestInit) => {
-  const response = await fetch(`${baseUrl}${path}`, init);
-  const text = await response.text();
+  // Prefer Electron localAi bridge so ComfyUI origin/CSRF checks do not 403.
+  const { localHttp } = await import('./localLlmService');
+  const method = (init?.method || 'GET').toUpperCase();
+  let body: unknown;
+  if (init?.body !== undefined && init.body !== null) {
+    if (typeof init.body === 'string') {
+      try { body = JSON.parse(init.body); } catch { body = init.body; }
+    } else {
+      body = init.body;
+    }
+  }
+  const result = await localHttp(`${baseUrl}${path}`, { method, body, timeoutMs: 120000 });
   let data: any = null;
   try {
-    data = text ? JSON.parse(text) : null;
+    data = result.text ? JSON.parse(result.text) : null;
   } catch {
     data = null;
   }
-  if (!response.ok) {
+  if (!result.ok) {
     const nodeErrors = data?.node_errors ? Object.values(data.node_errors).map((entry: any) => entry?.errors?.map((e: any) => `${e.message}: ${e.details}`).join('; ')).join(' | ') : '';
-    throw new Error(`ComfyUI: ${data?.error?.message || text || response.status}${nodeErrors ? ` (${nodeErrors})` : ''}`);
+    const statusHint = result.status === 403
+      ? ' (403: use the desktop app local bridge, or start ComfyUI with --enable-cors-header)'
+      : '';
+    throw new Error(`ComfyUI: ${data?.error?.message || result.text || result.status}${nodeErrors ? ` (${nodeErrors})` : ''}${statusHint}`);
   }
   return data;
 };
