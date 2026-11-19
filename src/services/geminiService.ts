@@ -7,6 +7,7 @@ import { recordUsage } from '../utils/usageTracker';
 import { batchDirectorChunks, orderDirectorShots, splitScenesForDirector, splitScriptIntoScenes, targetShotCount } from '../utils/directorScenes';
 import type { DirectorSceneChunk } from '../utils/directorScenes';
 import { DIRECTOR_COUNT_RULE, DIRECTOR_COVERAGE_RULE, DIRECTOR_FORMAT_RULES, DIRECTOR_LIGHTING, DIRECTOR_MOVE_RULE, DIRECTOR_NAMES_RULE, DIRECTOR_PROMPT_RULE, DIRECTOR_SHOT_TYPES, DIRECTOR_TEXT_RULE } from '../utils/directorAgent';
+import { buildUnifiedPlanningRules } from './cinematicPlanning';
 import { trackTask } from './taskCenter';
 import { extractVerdictObject, parseVisualContinuityVerdict, VISUAL_CONTINUITY_SCHEMA, type VisualContinuityVerdict } from '../utils/visualContinuity';
 import { getGoogleModelProvider } from './googleModelProvider';
@@ -2680,7 +2681,8 @@ export const generateShotImagePrompts = async (
     script: string,
     productionGuidelines: string,
     stylePrompt?: string,
-    aspectRatio: StoryboardAspectRatio = '16:9'
+    aspectRatio: StoryboardAspectRatio = '16:9',
+    options?: { productionFormat?: string; simplified?: boolean }
 ): Promise<ShotPrompt[]> => {
     const resolvedStyle = stylePrompt?.trim();
     const styleBlock = resolvedStyle
@@ -2691,26 +2693,32 @@ export const generateShotImagePrompts = async (
     const aspectRatioBlock = buildStoryboardAspectRatioGuidance(aspectRatio);
     const scriptExcerpt = script.substring(0, 14000);
     const guidelinesExcerpt = productionGuidelines.substring(0, 6000);
-    const content = `You are a world-class Director of Photography (DoP) and Storyboard Artist. Your task is to translate a film script into a series of highly technical, cinematic, and actionable visual prompts for an image generation AI.
+    const planningRules = buildUnifiedPlanningRules(options?.productionFormat);
+    const simplifiedNote = options?.simplified
+        ? 'SIMPLIFIED QUICK-DRAFT MODE: still obey coverage and scene assignment, but keep prompts shorter.'
+        : 'This path must match Director cinematographic intelligence — not a weaker bypass.';
+    const content = `You are a world-class Director of Photography (DoP) and Storyboard Artist. Translate the script into a cinematic shot list for single-frame storyboard images.
 
-        **Expert Cinematography Instructions:**
-        1. **Lighting:** Define the lighting setup for every shot (e.g., "High-key", "Low-key noir", "Rembrandt lighting", "Soft diffused window light", "Practical neons"). Ensure the lighting reflects the emotional beat of the scene as per the script.
-        2. **Composition:** Specify lens choices (e.g., "35mm wide", "85mm portrait", "Anamorphic"), camera angles ("Low angle hero shot", "Dutch tilt", "Over-the-shoulder"), and depth of field ("Shallow depth of field with bokeh").
-        3. **Continuity:** Analyze the script sequentially. When generating the prompt for Shot 2, you MUST consider the visual state established in Shot 1 to maintain continuity.
-        4. **Color:** Specify a color palette that supports the narrative (e.g., "Cold blues and cyans for isolation", "Warm golden hues for nostalgia").
-        5. **Products/Branding:** If this is a commercial, explicitly identify any products or logos mentioned in the shot.
-        6. **Style:** Follow the Visual Style below for every shot and include it explicitly in each prompt.
-        7. **Aspect Ratio:** Follow the aspect-ratio-specific framing strategy below in both shot design and prompt wording.
+        ${simplifiedNote}
+
+        **Unified cinematic planning rules (same as Director):**
+        ${planningRules}
+
+        **Additional craft notes:**
+        1. Lighting: choose a concrete setup per shot that matches the emotional beat.
+        2. Composition: describe framing and subject placement WITHOUT naming a focal length or camera body (UI presets supply those).
+        3. Continuity: keep wardrobe, props, screen direction and time of day consistent across consecutive shots.
+        4. Color: specify a palette that supports the narrative.
+        5. Products/props: use exact names when present.
+        6. Style: follow the Visual Style below.
+        7. Aspect Ratio: follow the framing strategy below.
+        8. Single frame only: never describe split screens, collages, multi-panel boards or contact sheets.
 
         ${styleBlock}
         ${aspectRatioBlock}
 
-        For each distinct shot or action sequence in the script, generate a single, detailed prompt consistent with the visual style.
-
-        Return the output as a single JSON object with a key "shots".
-        Output must be valid JSON only (no markdown, no extra text).
-        Example:
-        {"shots":[{"shot":1,"description":"...","prompt":"...","characters":["Name"],"environment":"Location","products":[]}]}
+        Return valid JSON only:
+        {"shots":[{"shot":1,"sceneNumber":1,"sceneShotNumber":1,"description":"...","prompt":"...","narrativePurpose":"establishing|master|ots|reaction|insert|hook|freeze|...","shotTypePresetId":"wide","lightingPresetId":"cinematic","cameraAngle":"eye-level","cameraMovement":"static","characters":["Name"],"environment":"Location","products":["Prop"],"rationale":"..."}]}
 
         **Production Guidelines:**
         ---
@@ -2788,14 +2796,22 @@ export const generateShotImagePrompts = async (
                         items: {
                             type: Type.OBJECT,
                             properties: {
-                                shot: { type: Type.NUMBER, description: "The sequential shot number." },
+                                shot: { type: Type.NUMBER, description: "The sequential global shot number." },
+                                sceneNumber: { type: Type.NUMBER, description: "Script scene number this shot belongs to." },
+                                sceneShotNumber: { type: Type.NUMBER, description: "Shot number within the scene." },
                                 description: { type: Type.STRING, description: "A brief description of the shot from the script." },
-                                prompt: { type: Type.STRING, description: "The detailed, cinematic image generation prompt, explicitly including lighting, lens choice, and continuity details." },
-                                characters: { type: Type.ARRAY, description: "A list of character names in the shot.", items: { type: Type.STRING } },
-                                environment: { type: Type.STRING, description: "The name of the environment/location for this shot.", nullable: true },
-                                products: { type: Type.ARRAY, description: "List of products or logos appearing in this shot.", items: { type: Type.STRING } }
+                                prompt: { type: Type.STRING, description: "Single-frame cinematic image prompt: subject/action, framing, lighting, location, mood. No camera moves, dialogue, shot numbers, or focal-length/camera-body names." },
+                                narrativePurpose: { type: Type.STRING, description: "Coverage purpose: establishing, master, ots, reverse, reaction, insert, hook, freeze, pov, cutaway." },
+                                shotTypePresetId: { type: Type.STRING, description: "Authorized shot type id." },
+                                lightingPresetId: { type: Type.STRING, description: "Authorized lighting id." },
+                                cameraAngle: { type: Type.STRING, description: "Camera angle (eye-level, low, high, dutch, ots…)." },
+                                cameraMovement: { type: Type.STRING, description: "Intended camera move for filming (static, pan, dolly in…)." },
+                                characters: { type: Type.ARRAY, description: "Exact character names visible in frame.", items: { type: Type.STRING } },
+                                environment: { type: Type.STRING, description: "Exact location name.", nullable: true },
+                                products: { type: Type.ARRAY, description: "Exact prop/product names visible in frame.", items: { type: Type.STRING } },
+                                rationale: { type: Type.STRING, description: "What the shot does for the story or edit." },
                             },
-                            required: ["shot", "description", "prompt", "characters", "environment"]
+                            required: ["shot", "sceneNumber", "sceneShotNumber", "description", "prompt", "characters", "environment", "shotTypePresetId"]
                         }
                     }
                 },

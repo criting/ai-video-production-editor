@@ -25,11 +25,15 @@ export type PromptFamily =
   | 'gemini-image'
   | 'imagen'
   | 'flux'
+  | 'sdxl'
+  | 'qwen-image'
   | 'seedream'
   | 'gpt-image'
   | 'ideogram'
   | 'krea'
   | 'wan-image'
+  | 'draw-things-flux'
+  | 'draw-things-sdxl'
   | 'generic-image'
   | 'veo'
   | 'kling'
@@ -76,7 +80,13 @@ export const resolvePromptFamily = (modelId: string | null | undefined, kind: Pr
   if (id === 'midjourney') return 'midjourney';
   if (id === 'nano' || id === 'nano-banana-2-fal' || id.startsWith('gemini') || id.includes('nano-banana')) return 'gemini-image';
   if (id === 'imagen') return 'imagen';
+  if (id === 'draw-things' || id.includes('draw-things')) {
+    if (id.includes('sdxl')) return 'draw-things-sdxl';
+    return 'draw-things-flux';
+  }
   if (id.startsWith('flux') || id.startsWith('machgen-flux')) return 'flux';
+  if (id.includes('sdxl') || id.includes('juggernaut') || id.includes('realvisxl')) return 'sdxl';
+  if (id.includes('qwen')) return 'qwen-image';
   if (id.includes('seedream')) return 'seedream';
   if (id.includes('gpt-image')) return 'gpt-image';
   if (id.includes('ideogram')) return 'ideogram';
@@ -221,6 +231,11 @@ const RECIPES: Record<PromptFamily, Recipe> = {
   },
   // Subject + action + style + context, plain prose, no negatives at all.
   flux: { order: ['subject', 'style', 'lighting', 'camera', 'text', 'reference', 'continuity', 'aspect'], join: 'sentences', keepAspectText: 'cinemascope', negatives: 'drop' },
+  // SDXL / A1111-style: subject first, quality tags light, negatives as a separate field when possible.
+  sdxl: { order: ['subject', 'camera', 'lighting', 'style', 'text', 'reference', 'continuity', 'aspect'], join: 'phrases', keepAspectText: 'cinemascope', negatives: 'drop' },
+  'qwen-image': { order: ['subject', 'camera', 'lighting', 'style', 'text', 'reference', 'continuity', 'aspect'], join: 'sentences', keepAspectText: 'cinemascope', negatives: 'avoid-sentence' },
+  'draw-things-flux': { order: ['subject', 'style', 'lighting', 'camera', 'text', 'reference', 'continuity', 'aspect'], join: 'sentences', keepAspectText: 'cinemascope', negatives: 'drop' },
+  'draw-things-sdxl': { order: ['subject', 'camera', 'lighting', 'style', 'text', 'reference', 'continuity', 'aspect'], join: 'phrases', keepAspectText: 'cinemascope', negatives: 'drop' },
   // Each clause is a directive: format, subject, composition, lighting, in-image text, style.
   seedream: { order: ['camera', 'subject', 'lighting', 'text', 'style', 'reference', 'continuity', 'aspect'], join: 'lines', keepAspectText: 'cinemascope', negatives: 'avoid-sentence' },
   // Brief the photographer: scene → subject → key details → constraints.
@@ -284,10 +299,27 @@ const RECIPES: Record<PromptFamily, Recipe> = {
 // ---------------------------------------------------------------------------
 // Public API
 
-export const adaptPromptForModel = (modelId: string | null | undefined, prompt: string, ctx: AdaptContext): string => {
+export type AdaptedPromptPackage = {
+  originalPrompt: string;
+  modelPrompt: string;
+  negativePrompt: string;
+  family: PromptFamily;
+  /** False when negatives should stay out of the main prompt (Flux, SDXL API field, etc.). */
+  embedNegativesInPrompt: boolean;
+};
+
+const buildAdaptedPrompt = (modelId: string | null | undefined, prompt: string, ctx: AdaptContext): AdaptedPromptPackage => {
   const raw = String(prompt || '').trim();
-  if (!raw) return raw;
   const family = resolvePromptFamily(modelId, ctx.kind);
+  if (!raw) {
+    return {
+      originalPrompt: raw,
+      modelPrompt: raw,
+      negativePrompt: (ctx.negatives || []).map((n) => n.trim()).filter(Boolean).join(', '),
+      family,
+      embedNegativesInPrompt: false,
+    };
+  }
   const recipe = RECIPES[family];
   const b = bucket(raw);
 
@@ -316,12 +348,29 @@ export const adaptPromptForModel = (modelId: string | null | undefined, prompt: 
   if (lead) body = family === 'imagen' ? `${lead} ${body.charAt(0).toLowerCase()}${body.slice(1)}` : `${lead} ${body}`;
   if (recipe.finish) body = recipe.finish(body, b, ctx);
 
+  let modelPrompt = body;
   if (negatives.length) {
-    if (recipe.negatives === 'param') body = `${body} --no ${negatives.join(', ')}`;
-    else if (recipe.negatives === 'avoid-sentence') body = `${body}${recipe.join === 'lines' ? '\n' : ' '}Avoid: ${negatives.join(', ')}.`;
+    if (recipe.negatives === 'param') modelPrompt = `${body} --no ${negatives.join(', ')}`;
+    else if (recipe.negatives === 'avoid-sentence') modelPrompt = `${body}${recipe.join === 'lines' ? '\n' : ' '}Avoid: ${negatives.join(', ')}.`;
   }
-  return body.replace(/[ \t]+/g, ' ').replace(/ \n/g, '\n').trim();
+  return {
+    originalPrompt: raw,
+    modelPrompt: modelPrompt.replace(/[ \t]+/g, ' ').replace(/ \n/g, '\n').trim(),
+    negativePrompt: negatives.join(', '),
+    family,
+    embedNegativesInPrompt: recipe.negatives !== 'drop',
+  };
 };
+
+export const adaptPromptForModel = (modelId: string | null | undefined, prompt: string, ctx: AdaptContext): string =>
+  buildAdaptedPrompt(modelId, prompt, ctx).modelPrompt;
+
+/** Keep the original cinematic prompt separate from the model-transformed prompt. */
+export const adaptPromptPackageForModel = (
+  modelId: string | null | undefined,
+  prompt: string,
+  ctx: AdaptContext,
+): AdaptedPromptPackage => buildAdaptedPrompt(modelId, prompt, ctx);
 
 /** One-paragraph instruction for LLM prompt writers so drafts already match the model's voice. */
 export const promptStyleGuide = (modelId: string | null | undefined, kind: PromptKind): string => {
@@ -334,7 +383,13 @@ export const promptStyleGuide = (modelId: string | null | undefined, kind: Promp
     case 'imagen':
       return 'Target model: Imagen 4. Start with "A photo of …" for photoreal results. Use concrete photography language: shot size, lens and aperture, light source and time of day, texture. Full sentences, no parameters, no aspect-ratio wording.';
     case 'flux':
+    case 'draw-things-flux':
       return 'Target model: FLUX. Plain prose, 30–80 words: main subject and action first, then critical style, then essential context. Never write negatives — say what should be there. No parameters, no aspect-ratio wording. Quote any in-image text and give colours as names or #RRGGBB.';
+    case 'sdxl':
+    case 'draw-things-sdxl':
+      return 'Target model: SDXL. Comma-separated phrases: subject, framing, lighting, style. Put negatives in the negative-prompt field, not the main prompt. No aspect-ratio wording when the API sets the ratio.';
+    case 'qwen-image':
+      return 'Target model: Qwen Image. Clear prose sentences: subject and action, then camera/framing, light, style, and continuity locks. Prefer concrete nouns over adjective stacks.';
     case 'seedream':
       return 'Target model: Seedream. Write short directive clauses, one per line, in this order: format/shot, subject, composition, lighting, in-image text (quoted), style. Concrete physical and compositional facts; skip "beautiful" and "high quality". No parameters, no aspect-ratio wording.';
     case 'gpt-image':
