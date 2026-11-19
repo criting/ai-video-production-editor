@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   STORYBOARD_WORKFLOW_CONSTRAINT,
   applyWorkflowBindings,
+  createAllBuiltinWorkflowStubs,
   createBuiltinStoryboardWorkflowStub,
   inferWorkflowInputs,
 } from './comfyWorkflowBindings.ts';
@@ -38,4 +39,22 @@ test('builtin storyboard stub enforces single-frame constraint', () => {
   assert.equal(stub.category, 'storyboard_frame');
   assert.match(stub.description || '', /one clean cinematic frame/i);
   assert.match(STORYBOARD_WORKFLOW_CONSTRAINT, /contact sheets/i);
+});
+
+test('builtin stubs cover every production workflow category', () => {
+  const stubs = createAllBuiltinWorkflowStubs();
+  const categories = new Set(stubs.map((stub) => stub.category));
+  for (const required of [
+    'character_identity',
+    'character_outfit',
+    'environment',
+    'prop',
+    'storyboard_frame',
+    'image_edit',
+    'image_to_video',
+    'text_to_video',
+  ]) {
+    assert.ok(categories.has(required as any), `missing category ${required}`);
+  }
+  assert.equal(stubs.length, 8);
 });

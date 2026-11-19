@@ -15,15 +15,19 @@ import type {
   WorkflowRecord,
 } from '../types/productionHierarchy.ts';
 import {
+  BUILTIN_CATEGORY_ASSIGNMENT_ORDER,
   STORYBOARD_WORKFLOW_CONSTRAINT,
   applyWorkflowBindings,
+  createAllBuiltinWorkflowStubs,
   createBuiltinStoryboardWorkflowStub,
   inferWorkflowInputs,
 } from './comfyWorkflowBindings.ts';
+import { LOCAL_MODEL_CATALOG, type LocalWorkflowKind } from '../data/localModelCatalog.ts';
 
 export {
   STORYBOARD_WORKFLOW_CONSTRAINT,
   applyWorkflowBindings,
+  createAllBuiltinWorkflowStubs,
   createBuiltinStoryboardWorkflowStub,
   inferWorkflowInputs,
 } from './comfyWorkflowBindings.ts';
@@ -221,19 +225,140 @@ export const validateWorkflowAgainstServer = async (
 
 
 export const ensureBuiltinWorkflows = (library: WorkflowLibrary): WorkflowLibrary => {
-  if (library.workflows.some((workflow) => workflow.builtinId === 'storyboard-single-frame')) {
-    return library;
+  const existing = new Set(
+    library.workflows.map((workflow) => workflow.builtinId).filter(Boolean) as string[],
+  );
+  const missing = createAllBuiltinWorkflowStubs().filter((stub) => !existing.has(stub.builtinId || ''));
+  if (missing.length === 0) {
+    // Still ensure every category has an assignment when possible.
+    const assignments = { ...(library.assignments || {}) };
+    let changed = false;
+    for (const category of BUILTIN_CATEGORY_ASSIGNMENT_ORDER) {
+      if (assignments[category]) continue;
+      const match = library.workflows.find((workflow) => workflow.category === category);
+      if (match) {
+        assignments[category] = match.id;
+        changed = true;
+      }
+    }
+    return changed ? saveWorkflowLibrary({ ...library, assignments }) : library;
   }
-  const stub = createBuiltinStoryboardWorkflowStub();
-  const next = {
-    ...library,
-    workflows: [...library.workflows, stub],
-    assignments: {
-      ...(library.assignments || {}),
-      storyboard_frame: library.assignments?.storyboard_frame || stub.id,
-    },
+
+  const workflows = [...library.workflows, ...missing];
+  const assignments = { ...(library.assignments || {}) };
+  for (const category of BUILTIN_CATEGORY_ASSIGNMENT_ORDER) {
+    if (assignments[category]) continue;
+    const match = workflows.find((workflow) => workflow.category === category);
+    if (match) assignments[category] = match.id;
+  }
+  return saveWorkflowLibrary({ ...library, workflows, assignments });
+};
+
+const CATALOG_KIND_TO_CATEGORY: Record<LocalWorkflowKind, WorkflowCategory> = {
+  t2i: 'storyboard_frame',
+  edit: 'image_edit',
+  i2v: 'image_to_video',
+  t2v: 'text_to_video',
+};
+
+export type CatalogWorkflowOption = {
+  key: string;
+  modelId: string;
+  modelLabel: string;
+  kind: LocalWorkflowKind;
+  category: WorkflowCategory;
+  source: string;
+  alreadyImported: boolean;
+};
+
+/** List Local AI catalog workflows that can be copied into the Workflow Manager library. */
+export const listCatalogWorkflowOptions = (library: WorkflowLibrary): CatalogWorkflowOption[] => {
+  const imported = new Set(
+    library.workflows
+      .filter((workflow) => workflow.source === 'catalog' && workflow.builtinId)
+      .map((workflow) => workflow.builtinId as string),
+  );
+  const options: CatalogWorkflowOption[] = [];
+  for (const model of LOCAL_MODEL_CATALOG) {
+    for (const kind of Object.keys(model.workflows || {}) as LocalWorkflowKind[]) {
+      const template = model.workflows[kind];
+      if (!template?.graph) continue;
+      const key = `catalog-${model.id}-${kind}`;
+      options.push({
+        key,
+        modelId: model.id,
+        modelLabel: model.label,
+        kind,
+        category: CATALOG_KIND_TO_CATEGORY[kind],
+        source: template.source,
+        alreadyImported: imported.has(key),
+      });
+    }
+  }
+  return options;
+};
+
+/** Copy one Local AI catalog workflow graph into the library (real executable API graph). */
+export const importCatalogWorkflow = (
+  library: WorkflowLibrary,
+  modelId: string,
+  kind: LocalWorkflowKind,
+): { library: WorkflowLibrary; workflow: WorkflowRecord | null } => {
+  const model = LOCAL_MODEL_CATALOG.find((entry) => entry.id === modelId);
+  const template = model?.workflows?.[kind];
+  if (!model || !template?.graph) return { library, workflow: null };
+
+  const builtinId = `catalog-${model.id}-${kind}`;
+  const existing = library.workflows.find((workflow) => workflow.builtinId === builtinId);
+  if (existing) return { library, workflow: existing };
+
+  const now = new Date().toISOString();
+  const category = CATALOG_KIND_TO_CATEGORY[kind];
+  const graph = JSON.parse(JSON.stringify(template.graph)) as Record<string, unknown>;
+  const inputs = inferWorkflowInputs(graph);
+  // Prefer catalog binding labels when inference missed the positive prompt.
+  if (template.bindings?.positive && !inputs.some((input) => input.key === 'prompt')) {
+    inputs.unshift({
+      key: 'prompt',
+      label: 'Prompt',
+      type: 'string',
+      required: true,
+      binding: { nodeId: template.bindings.positive.node, inputName: template.bindings.positive.input },
+    });
+  }
+
+  const workflow: WorkflowRecord = {
+    id: newId('wf'),
+    name: `${model.label} · ${kind.toUpperCase()}`,
+    description: `Imported from Local AI catalog (${template.source}). Category: ${category}.`,
+    category,
+    graph,
+    compatibleModels: [model.id],
+    requiredCustomNodes: [],
+    requiredModels: model.files.filter((file) => !file.optional).map((file) => `${file.folder}/${file.name}`),
+    inputs,
+    outputs: [{
+      key: model.kind === 'video' ? 'video' : 'image',
+      label: model.kind === 'video' ? 'Generated video' : 'Generated image',
+      type: model.kind === 'video' ? 'video' : 'image',
+    }],
+    defaultParameters: {},
+    supportedTasks: [category],
+    createdAt: now,
+    updatedAt: now,
+    source: 'catalog',
+    builtinId,
   };
-  return saveWorkflowLibrary(next);
+
+  const assignments = { ...(library.assignments || {}) };
+  if (!assignments[category]) assignments[category] = workflow.id;
+
+  const next = saveWorkflowLibrary({
+    ...library,
+    workflows: [...library.workflows, workflow],
+    assignments,
+  });
+  return { library: next, workflow };
 };
 
 // ---------------------------------------------------------------------------

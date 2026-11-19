@@ -8,7 +8,9 @@ import {
   duplicateWorkflow,
   ensureBuiltinWorkflows,
   getDefaultComfyUrl,
+  importCatalogWorkflow,
   importWorkflowJson,
+  listCatalogWorkflowOptions,
   loadGenerationJobs,
   loadWorkflowLibrary,
   probeComfyConnection,
@@ -41,6 +43,8 @@ const WorkflowManagerWorkspace: React.FC = () => {
     if (categoryFilter === 'all') return library.workflows;
     return library.workflows.filter((workflow) => workflow.category === categoryFilter);
   }, [categoryFilter, library.workflows]);
+
+  const catalogOptions = useMemo(() => listCatalogWorkflowOptions(library), [library]);
 
   const refreshConnection = useCallback(async (url = baseUrl) => {
     setProbing(true);
@@ -293,6 +297,44 @@ const WorkflowManagerWorkspace: React.FC = () => {
             )}
           </div>
         </div>
+      </section>
+
+      <section className="workflow-manager__section" aria-labelledby="catalog-workflows">
+        <h3 id="catalog-workflows">Local AI catalog workflows</h3>
+        <p className="workflow-manager__note">
+          These are real Comfy-Org API graphs shipped with Local AI model downloads (t2i / edit / i2v / t2v).
+          Builtin category rows above are templates until you import JSON or add a catalog workflow.
+          Character identity, outfit, environment, and prop still need your own API-format graphs.
+        </p>
+        <ul className="workflow-manager__jobs">
+          {catalogOptions.map((option) => (
+            <li key={option.key}>
+              <strong>{option.modelLabel}</strong>
+              <span>{option.kind.toUpperCase()} → {WORKFLOW_CATEGORIES.find((category) => category.id === option.category)?.label}</span>
+              <span>{option.source}</span>
+              {option.alreadyImported ? (
+                <em>In library</em>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const { library: next, workflow } = importCatalogWorkflow(library, option.modelId, option.kind);
+                    persist(next);
+                    if (workflow) {
+                      setSelectedId(workflow.id);
+                      setMessage(`Added “${workflow.name}” from the Local AI catalog.`);
+                    }
+                  }}
+                >
+                  Add to library
+                </button>
+              )}
+            </li>
+          ))}
+          {catalogOptions.length === 0 && (
+            <li className="workflow-manager__empty">No catalog workflows found.</li>
+          )}
+        </ul>
       </section>
 
       <section className="workflow-manager__section" aria-labelledby="task-assignments">

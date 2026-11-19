@@ -116,17 +116,25 @@ Select a workflow → **Validate on server**. The app checks which `class_type` 
 
 ### 2.3 Workflow categories (production tasks)
 
-| Category | Purpose |
-| --- | --- |
-| Character Identity | Consistent character reference sheets |
-| Character Outfit | Wardrobe changes without changing identity |
-| Environment | Locations / sets |
-| Prop | Objects |
-| Storyboard Frame | **Single** cinematic still (no multi-panel / contact sheet) |
-| Image Edit / Continuity | Correct props, wardrobe, lighting while preserving identity |
-| Image to Video | Approved frame → motion |
-| Text to Video | When the model/workflow supports it |
-| Custom | Anything else you import |
+| Category | What ships by default | How to make it executable |
+| --- | --- | --- |
+| Character Identity | Builtin **template** (empty graph + input schema) | Import your identity API JSON |
+| Character Outfit | Builtin template | Import edit / identity-preserving outfit JSON |
+| Environment | Builtin template | Import environment API JSON |
+| Prop | Builtin template | Import prop API JSON |
+| Storyboard Frame | Builtin template + optional Local AI **t2i** catalog graphs | Import JSON **or** add a catalog t2i workflow |
+| Image Edit / Continuity | Builtin template + Local AI **edit** catalog graphs | Prefer **Add to library** from catalog (FLUX / Qwen edit) |
+| Image to Video | Builtin template + Local AI **i2v** catalog graphs | Prefer catalog Wan / LTX i2v |
+| Text to Video | Builtin template + Local AI **t2v** catalog graphs | Prefer catalog t2v where available |
+| Custom | Only what you import | Import any API-format JSON |
+
+**Honest status:** We do **not** ship finished custom-node graphs for every production category. We ship:
+
+1. **Eight builtin templates** (one per production task) with the right metadata and inputs so assignments exist.  
+2. **Real executable graphs** from the Local AI model catalog (t2i / edit / i2v / t2v) via **Local AI catalog workflows → Add to library**.  
+3. Full support for **your** ComfyUI API-format exports.
+
+Character / outfit / environment / prop consistency workflows are intentionally templates until you plug in the graphs that match *your* installed nodes and models.
 
 **Assign to task:** pick a workflow and set which production task it serves. Assignments are stored in the workflow library (currently local to the app machine).
 
@@ -300,6 +308,9 @@ First-class local workflow engine UI: connection, model discovery counts, import
 | Issue | Fix |
 | --- | --- |
 | 403 Forbidden on Test connection | §1 of this guide |
+| Cannot scroll long screens | Update to the build that sets `.app-main-surface` to `overflow-y: auto`; restart the desktop app |
+| Only one workflow listed | Open Workflows once after update — builtin templates for all 8 categories are seeded automatically |
+| Template has empty graph / won’t run | Expected for identity/outfit/env/prop until you import API JSON or add a catalog workflow |
 | Missing nodes on Validate | Update ComfyUI; install required custom nodes manually; do not expect auto-download |
 | Models list empty but online | ComfyUI `/object_info` has no loader choices yet — install checkpoints into the models folder |
 | Episode switch “lost” shots | Confirm you saved; shots live on the previous episode — switch back |
