@@ -124,6 +124,18 @@ import NotebookLMWorkspace from './workspaces/NotebookLMWorkspace';
 import MicrodramaWorkspace from './workspaces/MicrodramaWorkspace';
 import PluginsWorkspace from './workspaces/PluginsWorkspace';
 import LocalAiWorkspace from './workspaces/LocalAiWorkspace';
+import WorkflowManagerWorkspace from './workspaces/WorkflowManagerWorkspace';
+import EpisodeNavigatorBar from './components/EpisodeNavigatorBar';
+import type { ProductionHierarchy } from './types/productionHierarchy';
+import {
+    createEpisode,
+    ensureProductionHierarchy,
+    flattenActiveEpisodeScript,
+    flattenActiveEpisodeToShotPrompts,
+    getActiveEpisode,
+    setActiveEpisode,
+    writeActiveEpisodeFromFlat,
+} from './services/productionHierarchy';
 import PostPageBar, { POST_PAGES, isPostPage } from './components/PostPageBar';
 import PricingScreen from './components/PricingScreen';
 import OptionsModal, { EstimateResult, OptionsModalConfig, PricingResult } from './components/OptionsModal';
@@ -1010,6 +1022,7 @@ function App() {
     const [sceneMapState, setSceneMapState] = useState<SceneMapState | null>(null);
     const [sceneWallState, setSceneWallState] = useState<SceneWallState | null>(null);
     const [worldGenState, setWorldGenState] = useState<WorldGenerationState | null>(null);
+    const [productionHierarchy, setProductionHierarchy] = useState<ProductionHierarchy | null>(null);
     const [analysisVideoFile, setAnalysisVideoFile] = useState<File | null>(null);
     const [analysisVideoUrl, setAnalysisVideoUrl] = useState<string | null>(null);
     const [analysisScriptText, setAnalysisScriptText] = useState('');
@@ -3101,6 +3114,7 @@ function App() {
             setSceneMapState(project.sceneMap || null);
             setSceneWallState(project.sceneWall ? normalizeSceneWallState(project.sceneWall) : null);
             setWorldGenState(project.worldGen || null);
+            setProductionHierarchy((project as { productionHierarchy?: ProductionHierarchy | null }).productionHierarchy || null);
             setVideoGenSeed(null);
             setLastAgentApplyBatch(null);
             setSelectedClipId(null);
@@ -3317,6 +3331,18 @@ function App() {
             setIsProjectSaving(true);
             const collaborationForSave = buildCollaborationForSave();
             const savedName = opts?.name || projectName || storyBible.title || 'Untitled Project';
+            const hierarchyForSave = writeActiveEpisodeFromFlat(
+                ensureProductionHierarchy(productionHierarchy, {
+                    storyBible,
+                    shotPrompts,
+                    sceneWall: sceneWallState,
+                    projectName: savedName,
+                }),
+                storyBible.script || '',
+                shotPrompts,
+                sceneWallState,
+            );
+            setProductionHierarchy(hierarchyForSave);
             const { savedAt } = await saveProjectToFolder(
                 folderPath,
                 {
@@ -3326,6 +3352,7 @@ function App() {
                     references,
                     avatars,
                     projectHub: { shotPrompts },
+                    productionHierarchy: hierarchyForSave,
                     mediaItems,
                     timelineClips,
                     timelineTracks,
@@ -3419,6 +3446,7 @@ function App() {
         setSceneMapState(null);
         setSceneWallState(null);
         setWorldGenState(null);
+        setProductionHierarchy(null);
         setVideoGenSeed(null);
         projectFileMtimeRef.current = null;
     };
@@ -3434,6 +3462,18 @@ function App() {
         setIsAutoSaving(true);
         try {
             const collaborationForSave = buildCollaborationForSave();
+            const hierarchyForSave = writeActiveEpisodeFromFlat(
+                ensureProductionHierarchy(productionHierarchy, {
+                    storyBible,
+                    shotPrompts,
+                    sceneWall: sceneWallState,
+                    projectName: projectName || storyBible.title || 'Untitled Project',
+                }),
+                storyBible.script || '',
+                shotPrompts,
+                sceneWallState,
+            );
+            setProductionHierarchy(hierarchyForSave);
             const { savedAt } = await saveProjectToFolder(
                 projectPath,
                 {
@@ -3443,6 +3483,7 @@ function App() {
                     references,
                     avatars,
                     projectHub: { shotPrompts },
+                    productionHierarchy: hierarchyForSave,
                     mediaItems,
                     timelineClips,
                     timelineTracks,
@@ -3518,6 +3559,7 @@ function App() {
         sceneMapState,
         sceneWallState,
         worldGenState,
+        productionHierarchy,
         projectName,
         isProjectSaving,
         isProjectLoading,
@@ -8683,7 +8725,53 @@ function App() {
             onSmartFill: handleSmartFill,
         };
 
+        const handleSwitchEpisode = (episodeId: string) => {
+            if (!productionHierarchy) return;
+            if (episodeId === productionHierarchy.activeEpisodeId) {
+                const episode = getActiveEpisode(productionHierarchy);
+                resetShotPrompts(normalizeShotPrompts(flattenActiveEpisodeToShotPrompts(productionHierarchy)));
+                setStoryBible((prev) => ({ ...prev, script: episode?.script || flattenActiveEpisodeScript(productionHierarchy) }));
+                setSceneWallState(episode?.sceneWall ? normalizeSceneWallState(episode.sceneWall) : null);
+                return;
+            }
+            const flushed = writeActiveEpisodeFromFlat(
+                productionHierarchy,
+                storyBible.script || '',
+                shotPrompts,
+                sceneWallState,
+            );
+            const next = setActiveEpisode(flushed, episodeId);
+            const episode = getActiveEpisode(next);
+            setProductionHierarchy(next);
+            resetShotPrompts(normalizeShotPrompts(flattenActiveEpisodeToShotPrompts(next)));
+            setStoryBible((prev) => ({ ...prev, script: episode?.script || '' }));
+            setSceneWallState(episode?.sceneWall ? normalizeSceneWallState(episode.sceneWall) : null);
+        };
+
+        const handleAddEpisode = (title?: string) => {
+            const base = productionHierarchy
+                ? writeActiveEpisodeFromFlat(
+                    productionHierarchy,
+                    storyBible.script || '',
+                    shotPrompts,
+                    sceneWallState,
+                )
+                : null;
+            if (!base) return;
+            const next = createEpisode(base, { title });
+            setProductionHierarchy(next);
+            resetShotPrompts([]);
+            setStoryBible((prev) => ({ ...prev, script: '' }));
+            setSceneWallState(null);
+        };
+
         const renderProjectHub = (teamMode: boolean) => (
+            <div className="project-hub-with-episodes">
+                <EpisodeNavigatorBar
+                    hierarchy={productionHierarchy}
+                    onSwitchEpisode={handleSwitchEpisode}
+                    onAddEpisode={handleAddEpisode}
+                />
             <ProjectHubWorkspace
                         teamMode={teamMode}
                         storyBible={storyBible}
@@ -8745,6 +8833,7 @@ function App() {
                             setProjectHubActiveShotNumber(activeShotNumber);
                         }}
                     />
+            </div>
         );
 
         switch (activeWorkspace) {
@@ -9073,6 +9162,7 @@ function App() {
                 />
             );
             case 'LOCAL_AI': return <LocalAiWorkspace />;
+            case 'WORKFLOW_MANAGER': return <WorkflowManagerWorkspace />;
             case 'PLUGINS': return (
                 <PluginsWorkspace onOpenGrading={() => setActiveWorkspace('POST')} />
             );

@@ -47,11 +47,13 @@ export const probeDrawThings = async (baseUrl = getDrawThingsUrl()) => {
   }
 };
 
-/**
- * Models Draw Things runs as reference editors (FLUX.1 Kontext, FLUX.2 Klein, Qwen Image Edit…):
- * the start image is read as a reference at full strength instead of being re-noised.
- */
-export const isDrawThingsEditModel = (model?: string) => /kontext|klein|[_-]edit/i.test(model || '');
+export {
+  detectDrawThingsModelFamily,
+  isDrawThingsEditModel,
+  planDrawThingsReferences,
+  type DrawThingsModelFamily,
+  type DrawThingsReferencePlan,
+} from './drawThingsPlanning';
 
 /** Center-crops and scales an image to exactly width × height (Draw Things rejects any other size). */
 const fitImageToSize = async (image: { base64: string; mimeType: string }, width: number, height: number) => {

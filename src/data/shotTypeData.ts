@@ -50,7 +50,7 @@ export const SHOT_TYPE_PRESETS: ShotTypePreset[] = [
     {
         id: 'medium',
         label: 'Medium Shot',
-        prompt: 'medium shot, waist-up framing, narrative context, 35mm lens, street photography style',
+        prompt: 'medium shot, waist-up framing, narrative context, street photography style',
         image: shotMediumStreet,
     },
     {
@@ -74,7 +74,7 @@ export const SHOT_TYPE_PRESETS: ShotTypePreset[] = [
     {
         id: 'extreme_wide',
         label: 'Extreme Wide',
-        prompt: 'extreme wide shot, epic landscape, tiny human figure for scale, majestic scenery, 14mm lens',
+        prompt: 'extreme wide shot, epic landscape, tiny human figure for scale, majestic scenery',
         image: shotExtremeWide,
     },
     {

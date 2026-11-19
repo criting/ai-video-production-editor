@@ -36,6 +36,7 @@ const MODE_WORKSPACES: Record<UIMode, Workspace[]> = {
         'EXPORT',
         'PLUGINS',
         'LOCAL_AI',
+        'WORKFLOW_MANAGER',
         'TEAM',
     ],
     advanced: [
@@ -46,6 +47,7 @@ const MODE_WORKSPACES: Record<UIMode, Workspace[]> = {
         'NOTEBOOKLM',
         'PLUGINS',
         'LOCAL_AI',
+        'WORKFLOW_MANAGER',
         'TEAM',
         'IMPORT',
         'DESIGN',
@@ -74,6 +76,7 @@ const MODE_WORKSPACES: Record<UIMode, Workspace[]> = {
         'NOTEBOOKLM',
         'PLUGINS',
         'LOCAL_AI',
+        'WORKFLOW_MANAGER',
         'TEAM',
         'IMPORT',
         'DESIGN',

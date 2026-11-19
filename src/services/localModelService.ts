@@ -51,6 +51,23 @@ export const getComfyBaseUrl = () => {
   }
 };
 
+/** Persist ComfyUI base URL shared by Image Gen, Local AI, and Workflow Manager. */
+export const setComfyBaseUrl = (url: string) => {
+  const baseUrl = String(url || 'http://127.0.0.1:8188').trim().replace(/\/+$/, '') || 'http://127.0.0.1:8188';
+  let existing: Record<string, unknown> = {};
+  try {
+    existing = JSON.parse(localStorage.getItem(COMFY_CONFIG_KEY) || '{}') || {};
+  } catch {
+    existing = {};
+  }
+  try {
+    localStorage.setItem(COMFY_CONFIG_KEY, JSON.stringify({ ...existing, baseUrl }));
+  } catch {
+    /* storage unavailable */
+  }
+  return baseUrl;
+};
+
 type LocalModelsBridge = {
   download: (payload: { id: string; url: string; root: string; relativePath: string; token?: string; expectedSize?: number }) => Promise<{ ok: boolean; path?: string; cancelled?: boolean; error?: string }>;
   cancel: (payload: { id: string }) => Promise<{ ok: boolean }>;

@@ -29,6 +29,7 @@ export type Workspace =
   | 'MOODBOARD'
   | 'PLUGINS'
   | 'LOCAL_AI'
+  | 'WORKFLOW_MANAGER'
   | 'TEAM'
   | 'NOTEBOOKLM';
 
@@ -1527,14 +1528,54 @@ export type CreativeDNAShotOverride = Partial<CreativeDNAProfile> & {
   shotNumber?: number;
 };
 
+export type ShotDependencyFingerprint = {
+  scriptHash: string;
+  styleHash: string;
+  aspectRatio: string;
+  cameraPresetId: string;
+  lensPresetId: string;
+  shotTypePresetId: string;
+  lightingPresetId: string;
+  promptHash: string;
+  characterHashes: string[];
+  outfitHashes: string[];
+  environmentHash: string | null;
+  propHashes: string[];
+};
+
+export type ShotGenerationVersion = {
+  id: string;
+  createdAt: string;
+  imageUrl: string;
+  prompt: string;
+  modelPrompt?: string;
+  negativePrompt?: string;
+  modelId?: string;
+  modelFamily?: string;
+  fingerprint?: ShotDependencyFingerprint;
+  generatedBy?: string;
+};
+
+export type ShotPlanSource = 'director' | 'generate' | 'agent' | 'manual';
+
 export type ShotPrompt = {
   shot: number;
+  /** Stable id that survives renumbering. */
+  shotId?: string;
   sceneNumber?: number;
   sceneShotNumber?: number;
   shotLabel?: string;
   sceneSlugline?: string;
   prompt: string;
   description: string;
+  /** Structured narrative purpose (hook, reverse, insert, freeze…). */
+  narrativePurpose?: string;
+  /** Action / blocking description separate from the image prompt. */
+  actionDescription?: string;
+  composition?: string;
+  subjectPlacement?: string;
+  continuityAnchors?: string[];
+  negativePrompt?: string;
   characters: string[];
   environment: string | null;
   products?: string[];
@@ -1545,6 +1586,13 @@ export type ShotPrompt = {
   imageUrl?: string;
   imageVersions?: string[];
   selectedVersionIndex?: number;
+  /** Rich generation history (prompt + model + fingerprint per version). */
+  generationVersions?: ShotGenerationVersion[];
+  generationFingerprint?: ShotDependencyFingerprint;
+  isStale?: boolean;
+  staleReasons?: string[];
+  planSource?: ShotPlanSource;
+  scriptHash?: string;
   generatedBy?: string;
   relightSettings?: RelightSettings;
   relightModel?: 'gemini' | 'replicate';
@@ -1562,6 +1610,10 @@ export type ShotPrompt = {
   isFilming?: boolean;
   cameraPresetId?: string;
   lensPresetId?: string;
+  /** When true, hub camera dropdown must not overwrite this shot's camera. */
+  manualCameraOverride?: boolean;
+  /** When true, hub lens dropdown must not overwrite this shot's lens. */
+  manualLensOverride?: boolean;
   cameraYaw?: number;
   cameraPitch?: number;
   angleKeepEverything?: boolean;

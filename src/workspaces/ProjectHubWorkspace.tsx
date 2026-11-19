@@ -53,10 +53,33 @@ import { editImageWithFalGptImage2, editImageWithFalNanoBanana2, editImageWithFa
 import { getMidjourneyConcurrency, generateImagesWithMidjourney, type MidjourneyReference } from '../services/midjourneyAgentService';
 import type { StyleReference, CharacterAgeVariant } from '../types';
 import { getLocalModel, runLocalModel, sizeForAspect } from '../services/localModelService';
-import { generateImageWithDrawThings, isDrawThingsEditModel, probeDrawThings } from '../services/drawThingsService';
+import { generateImageWithDrawThings, isDrawThingsEditModel, planDrawThingsReferences, probeDrawThings } from '../services/drawThingsService';
 import { generateImageWithMachgen } from '../services/machgenService';
 import { getPreferredImageModel } from '../services/localSetupService';
-import { adaptPromptForModel, promptStyleGuide } from '../services/promptStyle';
+import { adaptPromptForModel, adaptPromptPackageForModel, promptStyleGuide } from '../services/promptStyle';
+import {
+    appendSingleFrameConstraints,
+    assignStableShotId,
+    ensureShotHasScene,
+    renumberSceneShots,
+    validateShotDiversity,
+} from '../services/cinematicPlanning';
+import {
+    buildAuthoritativeCameraLensClause,
+    framingOnlyShotTypePrompt,
+    resolveEffectiveCameraConfig,
+    snapshotHubCameraLensOntoShot,
+    stripConflictingCameraLensText,
+} from '../services/shotCameraLens';
+import {
+    appendGenerationVersion,
+    buildShotDependencyFingerprint,
+    clearGeneratedImage,
+    refreshShotFingerprints,
+    selectShotsForGeneration,
+    type GenerateShotMode,
+} from '../services/shotDependency';
+import { buildSceneShots } from '../utils/directorAgent';
 import PromptPreview from '../components/PromptPreview';
 import { FAL_VIDEO_CATALOG, getFalVideoCatalogEntry, isFalCatalogVideoModel, pickCatalogAspect } from '../services/falVideoCatalog';
 import { generateCatalogVideo } from '../services/videoCatalogRouter';
@@ -9968,11 +9991,24 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
         prompt: string,
         modelAspectRatio: ModelAspectRatio,
         refs: Array<{ base64: string; mimeType: string }>,
-        opts?: { asReference?: boolean },
+        opts?: { asReference?: boolean; negativePrompt?: string; steps?: number; guidance?: number; seed?: number },
     ): Promise<MediaItem> => {
         const [width, height] = sizeForAspect(modelAspectRatio, imageSize);
         if (model === 'draw-things') {
-            return generateImageWithDrawThings({ prompt, width, height, image: refs[0], strength: refs[0] ? (opts?.asReference ? 1 : 0.55) : undefined });
+            return generateImageWithDrawThings({
+                prompt,
+                negativePrompt: opts?.negativePrompt,
+                width,
+                height,
+                steps: opts?.steps,
+                guidance: opts?.guidance,
+                seed: opts?.seed,
+                image: refs[0],
+                strength: refs[0] ? (opts?.asReference ? 1 : 0.55) : undefined,
+            });
+        }
+        if (refs.length > 1 && !getLocalModel(model)?.workflows.edit) {
+            console.info('Multiple references selected, but this local model has no edit workflow — only the prompt will carry them. Prefer a ComfyUI multi-ref edit workflow.');
         }
         const canEdit = Boolean(getLocalModel(model)?.workflows.edit);
         return runLocalModel(model, refs.length > 0 && canEdit ? 'edit' : 't2i', { prompt, width, height, images: canEdit ? refs : undefined, enhance: true });
@@ -10668,7 +10704,8 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
         setStoryboardFocusShot(remaining[0]?.shot ?? null);
     };
 
-    const handleGenerateStoryboard = async () => {
+    const handleGenerateStoryboard = async (options?: { mode?: 'director' | 'quick' }) => {
+        const planMode = options?.mode || 'director';
         const scopedForFeature = directorSceneSelectionEnabled && directorSceneScope.isScoped;
         if (directorSceneSelectionEnabled && directorSceneScope.parseError) {
             setError(directorSceneScope.parseError);
@@ -10685,15 +10722,40 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
         if (!scopedForFeature && shotPrompts.some((shot) => shot.imageUrl || shot.videoUrl)) {
             if (!window.confirm('Regenerate the whole shot list? Existing frames and videos will be dropped. Select a scene in the strip first to redo only that scene.')) return;
         }
+
+        // Default path: same Director scene-by-scene planner (unified cinematic intelligence).
+        if (planMode === 'director') {
+            setIsLoading(scopedForFeature
+                ? `Director storyboard planning for ${directorSceneScope.summary}...`
+                : 'Director storyboard planning (cinematic coverage)...');
+            try {
+                const treatment = await handleRunDirector({ background: true, onProgress: (message) => setIsLoading(message) });
+                if (!treatment) {
+                    setIsLoading(false);
+                    return;
+                }
+                const applied = handleApplyDirectorToStoryboard(treatment);
+                if (applied.shotCount > 0) {
+                    setError(`Cinematic storyboard planned via Director (${applied.shotCount} shots). Review coverage, then Generate All Shots.`);
+                    window.setTimeout(() => setError(''), 4000);
+                }
+                setIsLoading(false);
+            } catch (e) {
+                handleError(e);
+            }
+            return;
+        }
+
         setIsLoading(scopedForFeature
-            ? `Generating Context-Aware Shot List for ${directorSceneScope.summary}...`
-            : 'Generating Context-Aware Shot List...');
+            ? `Quick draft shot list for ${directorSceneScope.summary}...`
+            : 'Quick draft shot list (simplified)...');
         try {
             const prompts = await generateShotImagePrompts(
                 scriptForStoryboard,
                 storyBible.productionGuidelines,
                 stylePrompt,
-                referenceAspectRatio
+                referenceAspectRatio,
+                { productionFormat: storyBible.productionFormat, simplified: true },
             );
             const normalized = prompts.map((p, index) => ({
                 ...p,
@@ -10760,7 +10822,7 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                 const resolvedCharacters = aiMatch ? aiCharacters : alignedShot.characters;
                 const resolvedProducts = aiMatch ? aiProducts : alignedShot.products;
                 const resolvedEnvironment = aiMatch ? aiEnvironment : alignedShot.environment;
-                return {
+                const withScene = ensureShotHasScene({
                     ...normalizedShot,
                     sceneNumber: Number.isFinite(normalizedShot.sceneNumber)
                         ? Number(normalizedShot.sceneNumber)
@@ -10778,6 +10840,11 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                     characters: resolvedCharacters,
                     environment: resolvedEnvironment,
                     products: resolvedProducts,
+                    narrativePurpose: (p as ShotPrompt).narrativePurpose,
+                    shotTypePresetId: resolveShotTypePresetId((p as ShotPrompt).shotTypePresetId) || (p as ShotPrompt).shotTypePresetId,
+                    lightingPresetId: resolveLightingPresetId((p as ShotPrompt).lightingPresetId) || (p as ShotPrompt).lightingPresetId,
+                    cameraAngle: (p as ShotPrompt).cameraAngle,
+                    planSource: 'generate',
                     cameraPresetId,
                     lensPresetId,
                     cameraYaw: 0,
@@ -10785,10 +10852,10 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                     angleKeepEverything: true,
                     isAngleGenerating: false,
                     cameraMovementPreset: 'none',
-                    // Initialize empty contextReferences (manual list starts empty)
-                    // Auto-matches are handled via characters/products/environment fields
                     contextReferences: [],
-                    motionPrompt: '',
+                    motionPrompt: (p as any).cameraMovement && !/^static$/i.test(String((p as any).cameraMovement))
+                        ? `Camera: ${String((p as any).cameraMovement).trim()}`
+                        : '',
                     motionPromptIsGenerating: false,
                     motionReferenceUrl: undefined,
                     motionControlMode: 'std' as const,
@@ -10802,9 +10869,12 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                     voiceChangerEnabled: true,
                     voiceoverUrl: undefined,
                     voiceoverIsGenerating: false,
-                };
+                    analysisNotes: (p as any).rationale ? [`Quick draft: ${String((p as any).rationale)}`] : undefined,
+                }, scopedForFeature ? directorSceneScope.selectedSceneNumbers[0] : 1);
+                return assignStableShotId(withScene);
             });
-            setShotPrompts(scopedForFeature ? mergeShotsIntoScenes(shotPrompts, nextShotPrompts, directorSceneScope.selectedSceneNumbers) : nextShotPrompts);
+            const renumberedQuick = renumberSceneShots(nextShotPrompts);
+            setShotPrompts(scopedForFeature ? mergeShotsIntoScenes(shotPrompts, renumberedQuick, directorSceneScope.selectedSceneNumbers) : renumberedQuick);
             if (canUseSceneWall && sceneWallEnabled && onChangeSceneWallState) {
                 const nextSceneWall = buildSceneWallFromProjectContext({
                     scriptText: storyBible.script || '',
@@ -11506,12 +11576,19 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                 sketchData = { base64, mimeType: 'image/png' };
             }
 
-            const cameraPreset = CAMERA_PRESETS.find(preset => preset.id === (shot.cameraPresetId || cameraPresetId));
-            const lensPreset = LENS_PRESETS.find(preset => preset.id === (shot.lensPresetId || lensPresetId));
-            const effectiveAspectRatio = lensPreset?.aspectRatioOverride || referenceAspectRatio;
+            const effectiveCamera = resolveEffectiveCameraConfig({
+                shot,
+                hubCameraPresetId: cameraPresetId,
+                hubLensPresetId: lensPresetId,
+                cameraPresets: CAMERA_PRESETS,
+                lensPresets: LENS_PRESETS,
+            });
+            const cameraPreset = CAMERA_PRESETS.find(preset => preset.id === effectiveCamera.cameraPresetId);
+            const lensPreset = LENS_PRESETS.find(preset => preset.id === effectiveCamera.lensPresetId);
+            const effectiveAspectRatio = (effectiveCamera.aspectRatioOverride || referenceAspectRatio) as AspectRatioOption;
             const modelAspectRatio = resolveModelAspectRatio(effectiveAspectRatio);
-            const aspectRatioHint = buildAspectRatioPromptHint(effectiveAspectRatio, lensPreset?.aspectRatioHint);
-            const cameraLensPrompt = [cameraPreset?.prompt, lensPreset?.prompt].filter(Boolean).join(', ');
+            const aspectRatioHint = buildAspectRatioPromptHint(effectiveAspectRatio, effectiveCamera.aspectRatioHint);
+            const cameraLensPrompt = buildAuthoritativeCameraLensClause(effectiveCamera);
             const shotYaw = shot.cameraYaw ?? 0;
             const shotPitch = shot.cameraPitch ?? 0;
             const angleHint = (shotYaw !== 0 || shotPitch !== 0)
@@ -11519,7 +11596,9 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                 : '';
             const resolvedShotType = resolveShotTypePresetId(shot.shotTypePresetId) || shot.shotTypePresetId;
             const resolvedLighting = resolveLightingPresetId(shot.lightingPresetId) || shot.lightingPresetId;
-            const shotTypePrompt = SHOT_TYPE_PRESETS.find((preset) => preset.id === resolvedShotType)?.prompt || '';
+            const shotTypePrompt = framingOnlyShotTypePrompt(
+                SHOT_TYPE_PRESETS.find((preset) => preset.id === resolvedShotType)?.prompt || '',
+            );
             const lightingPrompt = LIGHTING_PRESETS.find((preset) => preset.id === resolvedLighting)?.prompt || '';
             const directorAngleHint = shot.cameraAngle ? `camera angle: ${shot.cameraAngle}` : '';
             const visualTriggerHint = shot.visualTriggers && shot.visualTriggers.length > 0
@@ -11543,18 +11622,29 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                 && useGeminiContextMemory
                 && isGeminiEmbedding2Configured();
 
-            const buildStoryboardPrompt = (promptCore: string) => [
-                stylePrompt,
-                promptCore,
-                shotTypePrompt,
-                lightingPrompt,
-                directorAngleHint,
-                cameraLensPrompt,
-                aspectRatioHint,
-                angleHint,
-                visualTriggerHint,
-                ...contextPromptBits,
-            ].filter(Boolean).join('. ');
+            const buildStoryboardPrompt = (promptCore: string) => {
+                const cleanedCore = stripConflictingCameraLensText(promptCore, {
+                    stripLens: Boolean(cameraLensPrompt),
+                    stripCameraBody: Boolean(effectiveCamera.cameraPrompt),
+                });
+                const assembled = [
+                    stylePrompt,
+                    cleanedCore,
+                    shotTypePrompt,
+                    lightingPrompt,
+                    directorAngleHint,
+                    cameraLensPrompt,
+                    aspectRatioHint,
+                    angleHint,
+                    visualTriggerHint,
+                    shot.composition ? `composition: ${shot.composition}` : '',
+                    shot.subjectPlacement ? `subject placement: ${shot.subjectPlacement}` : '',
+                    ...(shot.continuityAnchors || []).map((anchor) => `continuity anchor: ${anchor}`),
+                    ...contextPromptBits,
+                ].filter(Boolean).join('. ');
+                // Burst Frame is a separate filming operation — storyboard stills stay single-frame.
+                return appendSingleFrameConstraints(assembled, { weatherAware: true });
+            };
             const originalStoryboardPrompt = buildStoryboardPrompt(shot.prompt || shot.description || '');
 
             const renderStoryboardAttempt = async (rawPrompt: string) => {
@@ -11562,7 +11652,13 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                     ? pickImageModel({ prompt: rawPrompt, hasReferences: gptInputs.length > 0 }, REFERENCE_MODEL_OPTIONS.map((option) => option.id).filter((id) => id !== 'auto'), 'seedream-v5-pro-fal').model
                     : referenceImageModel;
                 if (referenceImageModel === 'auto') console.info(`Auto model: ${activeReferenceModel}`);
-                const fullPrompt = adaptPromptForModel(activeReferenceModel, rawPrompt, { kind: 'image', aspectRatio: effectiveAspectRatio, hasReferences: supplementalReferences.length > 0 });
+                const adapted = adaptPromptPackageForModel(activeReferenceModel, rawPrompt, {
+                    kind: 'image',
+                    aspectRatio: effectiveAspectRatio,
+                    hasReferences: supplementalReferences.length > 0,
+                    negatives: shot.negativePrompt ? [shot.negativePrompt] : undefined,
+                });
+                const fullPrompt = adapted.modelPrompt;
                 const seedreamInputs = compositionData ? [compositionData, ...supplementalReferences] : supplementalReferences;
                 const seedreamPrompt = compositionData
                     ? `${fullPrompt}\n\nUse the first input image as a strict composition reference${poseData ? ' (OpenPose pose map)' : ''}. Use remaining images as style/character/environment references.`
@@ -11739,12 +11835,44 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                     // ComfyUI edit models get the sketch plus every concept ref.
                     let localInputs = compositionData ? [compositionData, ...supplementalReferences] : supplementalReferences;
                     let asReference = false;
+                    let drawThingsNegative: string | undefined;
                     if (activeReferenceModel === 'draw-things') {
                         const loaded = compositionData ? undefined : (await probeDrawThings()).model;
-                        asReference = !compositionData && supplementalReferences.length > 0 && isDrawThingsEditModel(loaded);
+                        const refPlan = planDrawThingsReferences({
+                            model: loaded,
+                            references: [
+                                ...(compositionData ? [{ name: 'Composition map', role: 'composition', imageUrl: 'inline' }] : []),
+                                ...contextReferences
+                                    .map((ref) => {
+                                        const concept = references.find((item) => item.id === ref.id || item.name === ref.name);
+                                        return {
+                                            id: ref.id,
+                                            name: concept?.name || ref.name || 'Reference',
+                                            role: concept?.type || ref.tag || 'reference',
+                                            type: concept?.type,
+                                            imageUrl: ref.imageUrl || concept?.imageUrl || null,
+                                        };
+                                    })
+                                    .filter((ref) => ref.imageUrl),
+                            ],
+                        });
+                        if (refPlan.recommendComfyUi && refPlan.requested.length > 1) {
+                            console.info(refPlan.limitation);
+                        }
+                        asReference = !compositionData && refPlan.isEditModel && refPlan.submitted.length > 0;
                         localInputs = compositionData ? [compositionData] : asReference ? supplementalReferences.slice(0, 1) : [];
+                        drawThingsNegative = adapted.embedNegativesInPrompt ? undefined : (adapted.negativePrompt || undefined);
                     }
-                    imageMedia = await generateWithLocalImageModel(activeReferenceModel, asReference ? gptImage2Prompt : fullPrompt, modelAspectRatio, localInputs, { asReference });
+                    imageMedia = await generateWithLocalImageModel(
+                        activeReferenceModel,
+                        asReference ? gptImage2Prompt : fullPrompt,
+                        modelAspectRatio,
+                        localInputs,
+                        {
+                            asReference,
+                            negativePrompt: drawThingsNegative,
+                        },
+                    );
                 } else if (activeReferenceModel === 'firered') {
                     if (qwenInputs.length === 0) {
                         throw new Error('FireRed Edit requires at least one reference, sketch, pose, or previous-shot image for storyboards.');
@@ -12018,18 +12146,41 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
         }
     };
 
-    const handleGenerateAllShotImages = async (shots?: ShotPrompt[]) => {
-        const sourceShots = shots ?? shotPrompts;
+    const handleGenerateAllShotImages = async (
+        shots?: ShotPrompt[],
+        options?: { mode?: GenerateShotMode },
+    ) => {
+        const mode: GenerateShotMode = options?.mode || 'pending';
+        const sourceShots = refreshShotFingerprints(shots ?? shotPrompts, {
+            script: storyBible.script || '',
+            stylePrompt,
+            aspectRatio: referenceAspectRatio,
+            references,
+            hubCameraPresetId: cameraPresetId,
+            hubLensPresetId: lensPresetId,
+        });
         if (sourceShots.length === 0) {
             const message = 'No shots match the selected director persona.';
             setError(message);
             return { generatedCount: 0, error: message };
         }
-        const shotsToGenerate = sourceShots.filter(s => !s.imageUrl && !s.isGenerating);
+        const shotsToGenerate = selectShotsForGeneration(sourceShots, mode);
         if (shotsToGenerate.length === 0) {
-            const message = 'No pending shots to generate. Clear frames (or delete shots) first if you want Generate All to run again.';
+            const message = mode === 'stale'
+                ? 'No stale or pending shots to regenerate.'
+                : mode === 'all'
+                    ? 'No shots available to regenerate.'
+                    : 'No pending shots to generate. Clear frames, mark stale, or use Regenerate / Generate stale.';
             setError(message);
             return { generatedCount: 0, error: 'No pending shots to generate.' };
+        }
+        if (mode === 'all' || (mode === 'stale' && shotsToGenerate.some((shot) => shot.imageUrl))) {
+            const confirmed = window.confirm(
+                mode === 'all'
+                    ? `Regenerate images for ${shotsToGenerate.length} shot(s)? Previous frames are kept in version history.`
+                    : `Regenerate ${shotsToGenerate.length} stale/pending shot(s)? Previous frames are kept in version history.`,
+            );
+            if (!confirmed) return { generatedCount: 0, error: 'Cancelled.' };
         }
 
         // Cards show their own spinners; no hub-wide overlay, so the rest of the app stays usable.
@@ -12054,11 +12205,37 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
     };
 
     const applyCameraLensToAllShots = () => {
-        setShotPrompts(prev => prev.map(shot => ({
-            ...shot,
-            cameraPresetId,
-            lensPresetId
-        })));
+        setShotPrompts((prev) => prev.map((shot) => {
+            if (shot.manualCameraOverride || shot.manualLensOverride) return shot;
+            const next = {
+                ...shot,
+                cameraPresetId,
+                lensPresetId,
+            };
+            if (!shot.imageUrl) return next;
+            return {
+                ...next,
+                isStale: true,
+                staleReasons: Array.from(new Set([...(shot.staleReasons || []), 'camera', 'lens'])),
+            };
+        }));
+    };
+
+    const handleRefreshShotFingerprints = () => {
+        setShotPrompts((prev) => refreshShotFingerprints(prev, {
+            script: storyBible.script || '',
+            stylePrompt,
+            aspectRatio: referenceAspectRatio,
+            references,
+            hubCameraPresetId: cameraPresetId,
+            hubLensPresetId: lensPresetId,
+        }));
+    };
+
+    const handleRemoveGeneratedImage = (shotNumber: number) => {
+        setShotPrompts((prev) => prev.map((shot) => (
+            shot.shot === shotNumber ? clearGeneratedImage(shot) : shot
+        )));
     };
 
     const handleReviewShotCinematography = async (shotNumber: number) => {
@@ -13343,8 +13520,44 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
             setActiveDirectorSnapshotId(fallbackSnapshot.id);
         }
 
-        // Map director shots to project ShotPrompt structure
-        const mappedShots: ShotPrompt[] = treatmentToApply.shots.map((shot) => ({
+        // Prefer the shared Director → ShotPrompt mapper (props, outfits, warnings) then snapshot hub camera/lens.
+        const scenes = splitScriptIntoSceneBlocks(storyBible.script || '');
+        const sceneByNumber = new Map(scenes.map((scene) => [scene.sceneNumber, scene]));
+        const mappedFromAgent: ShotPrompt[] = [];
+        const shotsByScene = new Map<number, typeof treatmentToApply.shots>();
+        for (const shot of treatmentToApply.shots) {
+            const sceneNumber = Number.isFinite(shot.sceneNumber) ? Number(shot.sceneNumber) : 1;
+            const list = shotsByScene.get(sceneNumber) || [];
+            list.push(shot);
+            shotsByScene.set(sceneNumber, list);
+        }
+        for (const [sceneNumber, sceneShots] of [...shotsByScene.entries()].sort((a, b) => a[0] - b[0])) {
+            const block = sceneByNumber.get(sceneNumber) || {
+                sceneNumber,
+                slugline: sceneShots[0]?.sceneSlugline || `Scene ${sceneNumber}`,
+                text: '',
+            };
+            const built = buildSceneShots(
+                block,
+                sceneShots.map((shot) => ({
+                    prompt: shot.prompt,
+                    description: shot.description,
+                    characters: shot.characters,
+                    environment: shot.environment,
+                    props: shot.props,
+                    shotType: shot.shotTypePresetId,
+                    lighting: shot.lightingPresetId,
+                    cameraAngle: shot.cameraAngle,
+                    cameraMovement: shot.cameraMovement,
+                    visualTriggers: shot.visualTriggers,
+                    rationale: shot.rationale,
+                })),
+                references,
+            );
+            mappedFromAgent.push(...built.shots);
+        }
+
+        const mappedShots: ShotPrompt[] = (mappedFromAgent.length > 0 ? mappedFromAgent : treatmentToApply.shots.map((shot) => ({
             shot: shot.shotNumber,
             sceneNumber: shot.sceneNumber,
             sceneShotNumber: shot.sceneShotNumber,
@@ -13356,20 +13569,37 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
             description: shot.description,
             characters: shot.characters || [],
             environment: shot.environment?.trim() || null,
+            products: shot.props || [],
             motionPrompt: shot.cameraMovement && !/^static$/i.test(shot.cameraMovement.trim()) ? `Camera: ${shot.cameraMovement.trim()}` : undefined,
             shotTypePresetId: resolveShotTypePresetId(shot.shotTypePresetId) || shot.shotTypePresetId,
             lightingPresetId: resolveLightingPresetId(shot.lightingPresetId) || shot.lightingPresetId,
             cameraAngle: shot.cameraAngle,
             visualTriggers: shot.visualTriggers || [],
+            analysisNotes: shot.rationale ? [`Director: ${shot.rationale}`] : undefined,
             imageUrl: undefined,
             videoUrl: undefined,
             isGenerating: false,
             isFilming: false,
-            cameraPresetId: undefined,
-            lensPresetId: undefined,
-        }));
+        }))).map((shot, index) => assignStableShotId(snapshotHubCameraLensOntoShot({
+            ...shot,
+            shot: shot.shot || index + 1,
+            shotTypePresetId: resolveShotTypePresetId(shot.shotTypePresetId) || shot.shotTypePresetId,
+            lightingPresetId: resolveLightingPresetId(shot.lightingPresetId) || shot.lightingPresetId,
+            planSource: 'director' as const,
+            narrativePurpose: shot.narrativePurpose || shot.analysisNotes?.[0]?.replace(/^Director:\s*/i, ''),
+            imageUrl: undefined,
+            videoUrl: undefined,
+            isGenerating: false,
+            isFilming: false,
+        }, cameraPresetId, lensPresetId)));
 
-        const alignedShots = mappedShots.map((shot) => {
+        const renumberedMapped = renumberSceneShots(mappedShots);
+        const diversityIssues = validateShotDiversity(renumberedMapped);
+        if (diversityIssues.length > 0) {
+            console.info('Director diversity suggestions:', diversityIssues.slice(0, 8));
+        }
+
+        const alignedShots = renumberedMapped.map((shot) => {
             const aligned = alignShotToConcept(shot, references);
             return {
                 ...aligned,
@@ -17942,16 +18172,51 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                                     </div>
                                                                             <div className="phase-bar__actions">
                                         {canGenerateStoryboard && (shotPrompts.length === 0 || (effectiveSceneNumber !== null && storyboardVisibleShots.length === 0)) && (
-                                            <button onClick={handleGenerateStoryboard} className="app-button app-primary">
-                                                {effectiveSceneNumber !== null ? `Shot list for scene ${effectiveSceneNumber}` : 'Generate from Script'}
+                                            <>
+                                                <button
+                                                    onClick={() => handleGenerateStoryboard({ mode: 'director' })}
+                                                    className="app-button app-primary"
+                                                    title="Uses the Director scene-by-scene planner (coverage rules, format rules, structured shot sizes)."
+                                                >
+                                                    {effectiveSceneNumber !== null ? `Shot list for scene ${effectiveSceneNumber}` : 'Generate from Script'}
+                                                </button>
+                                                <button
+                                                    onClick={() => handleGenerateStoryboard({ mode: 'quick' })}
+                                                    className="app-button app-secondary"
+                                                    title="Optional simplified draft — still scene-aware, but thinner than Director mode."
+                                                >
+                                                    Quick draft
+                                                </button>
+                                            </>
+                                        )}
+                                        {shotPrompts.length > 0 && canGenerateStoryboard && (
+                                            <button
+                                                onClick={() => handleGenerateStoryboard({ mode: 'director' })}
+                                                className="app-button app-secondary"
+                                                title="Re-plan the shot list with Director rules. Confirm before replacing frames."
+                                            >
+                                                Refresh shot list
                                             </button>
                                         )}
                                         {shotPrompts.length > 0 && canGenerateStoryboard && storyboardVisibleShots.length > 0 && (
                                             <button
-                                                onClick={() => handleGenerateAllShotImages(storyboardVisibleShots)}
+                                                onClick={() => handleGenerateAllShotImages(storyboardVisibleShots, { mode: 'pending' })}
                                                 className="app-button app-primary"
                                             >
                                                 <MagicWandIcon className="w-5 h-5" /> {effectiveSceneNumber !== null ? `Generate scene ${effectiveSceneNumber}` : 'Generate All Shots'}
+                                            </button>
+                                        )}
+                                        {storyboardVisibleShots.some((shot) => shot.isStale || (!shot.imageUrl && !shot.isGenerating)) && canGenerateStoryboard && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    handleRefreshShotFingerprints();
+                                                    void handleGenerateAllShotImages(storyboardVisibleShots, { mode: 'stale' });
+                                                }}
+                                                className="app-button app-secondary"
+                                                title="Regenerate pending and outdated frames. Previous images stay in version history."
+                                            >
+                                                Generate stale
                                             </button>
                                         )}
                                         {storyboardVisibleShots.some((shot) => shot.imageUrl || shot.sketchUrl || shot.videoUrl) && (
@@ -18510,6 +18775,30 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                                                                         <div className="bg-black/60 backdrop-blur-md text-[10px] text-gray-200 px-2.5 py-1 rounded-md border border-white/10">
                                                                             Director: {(directorPersonas.find((p) => p.id === (shot.directorPersonaOverride || directorPersona)) || directorPersonas[0]).label}
                                                                         </div>
+                                                                        {(() => {
+                                                                            const cam = resolveEffectiveCameraConfig({
+                                                                                shot,
+                                                                                hubCameraPresetId: cameraPresetId,
+                                                                                hubLensPresetId: lensPresetId,
+                                                                                cameraPresets: CAMERA_PRESETS,
+                                                                                lensPresets: LENS_PRESETS,
+                                                                            });
+                                                                            return (
+                                                                                <div className="bg-black/60 backdrop-blur-md text-[10px] text-gray-200 px-2.5 py-1 rounded-md border border-white/10" title={`Effective camera for generation (${cam.source}${cam.shotLocked ? ', locked' : ''})`}>
+                                                                                    Cam: {cam.cameraLabel} · {cam.lensLabel}
+                                                                                </div>
+                                                                            );
+                                                                        })()}
+                                                                        {shot.isStale && (
+                                                                            <div className="bg-amber-500/20 backdrop-blur-md text-[10px] text-amber-100 px-2.5 py-1 rounded-md border border-amber-400/30">
+                                                                                Outdated{(shot.staleReasons || []).length ? `: ${(shot.staleReasons || []).join(', ')}` : ''}
+                                                                            </div>
+                                                                        )}
+                                                                        {shot.burstFrame && (
+                                                                            <div className="bg-indigo-500/20 backdrop-blur-md text-[10px] text-indigo-100 px-2.5 py-1 rounded-md border border-indigo-400/30" title="Burst Frame is a separate multi-frame filming operation — the storyboard still remains a single frame.">
+                                                                                Burst Frame (filming override)
+                                                                            </div>
+                                                                        )}
                                                                         {shotLock && (
                                                                             <div className="bg-amber-500/15 backdrop-blur-md text-[10px] text-amber-100 px-2.5 py-1 rounded-md border border-amber-400/30">
                                                                                 Locked by {shotLock.claimedBy.name}
