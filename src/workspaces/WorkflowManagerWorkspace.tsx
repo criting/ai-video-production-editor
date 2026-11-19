@@ -142,6 +142,15 @@ const WorkflowManagerWorkspace: React.FC = () => {
         <p className={`workflow-manager__status${connection?.online ? ' is-online' : ' is-offline'}`}>
           {message || (connection?.online ? 'Online' : 'Not connected')}
         </p>
+        {!connection?.online && /403/i.test(connection?.error || message || '') && (
+          <p className="workflow-manager__note">
+            A 403 usually means ComfyUI blocked a browser-origin request. Use the desktop (Electron) app so
+            requests go through the local AI bridge, or start ComfyUI with
+            {' '}<code>--enable-cors-header</code>
+            {' '}(and <code>--listen 0.0.0.0</code> if connecting over LAN). Keep ComfyUI updated; some builds
+            also need their security / CSRF middleware configured for local clients.
+          </p>
+        )}
         {connection?.online && (
           <div className="workflow-manager__models">
             <span>Checkpoints: {connection.models.checkpoints.length}</span>
