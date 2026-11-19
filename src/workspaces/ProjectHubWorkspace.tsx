@@ -10548,6 +10548,126 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
         }
     };
 
+    const renumberStoryboardShots = (shots: ShotPrompt[]): ShotPrompt[] => {
+        const renumbered = [...shots]
+            .sort((a, b) => a.shot - b.shot)
+            .map((shot, index) => ({ ...shot, shot: index + 1 }));
+        const sceneCounters = new Map<number, number>();
+        return renumbered.map((shot) => {
+            if (!Number.isFinite(shot.sceneNumber)) return { ...shot, shotLabel: undefined };
+            const sceneNumber = Number(shot.sceneNumber);
+            const nextSceneShot = (sceneCounters.get(sceneNumber) || 0) + 1;
+            sceneCounters.set(sceneNumber, nextSceneShot);
+            return {
+                ...shot,
+                sceneShotNumber: nextSceneShot,
+                shotLabel: `${sceneNumber}.${nextSceneShot}`,
+            };
+        });
+    };
+
+    const clearStoryboardFocusIfNeeded = (removedShotNumbers: Set<number>, remaining: ShotPrompt[]) => {
+        const nextFocus = remaining[0]?.shot ?? null;
+        const clearIfRemoved = (current: number | null, setter: (next: number | null) => void) => {
+            if (current !== null && removedShotNumbers.has(current)) setter(nextFocus);
+        };
+        clearIfRemoved(storyboardFocusShot, setStoryboardFocusShot);
+        clearIfRemoved(activeInpaintShotId, setActiveInpaintShotId);
+        clearIfRemoved(burstShotNumber, setBurstShotNumber);
+        clearIfRemoved(activeAngleShotId, setActiveAngleShotId);
+        if (extraShotInsertAfter > remaining.length) {
+            setExtraShotInsertAfter(Math.max(1, remaining.length));
+        }
+    };
+
+    const clearShotGeneratedMedia = (shot: ShotPrompt): ShotPrompt => ({
+        ...shot,
+        imageUrl: undefined,
+        imageVersions: undefined,
+        selectedVersionIndex: undefined,
+        generatedBy: undefined,
+        isGenerating: false,
+        sketchUrl: undefined,
+        isSketching: false,
+        startFrameUrl: undefined,
+        endFrameUrl: undefined,
+        videoUrl: undefined,
+        videoVersions: undefined,
+        selectedVideoIndex: undefined,
+        isFilming: false,
+        burstFrame: undefined,
+        continuityRefinedPrompt: undefined,
+        continuityRefinementSummary: undefined,
+        continuityRefinementPasses: undefined,
+        filmingContinuityRefinedPrompt: undefined,
+        filmingContinuityRefinementSummary: undefined,
+        filmingContinuityRefinementPasses: undefined,
+    });
+
+    const handleDeleteShot = (shotNumber: number) => {
+        const target = shotPrompts.find((shot) => shot.shot === shotNumber);
+        if (!target) return;
+        const hasMedia = Boolean(target.imageUrl || target.videoUrl || target.sketchUrl);
+        const label = formatShotLabel(target);
+        if (!window.confirm(hasMedia
+            ? `Delete shot ${label}? Its generated frame/video will be removed. This cannot be undone (editor undo may still work).`
+            : `Delete shot ${label}? This cannot be undone (editor undo may still work).`)) {
+            return;
+        }
+        const remaining = renumberStoryboardShots(shotPrompts.filter((shot) => shot.shot !== shotNumber));
+        setShotPrompts(remaining);
+        clearStoryboardFocusIfNeeded(new Set([shotNumber]), remaining);
+    };
+
+    const handleClearShotFrame = (shotNumber: number) => {
+        const target = shotPrompts.find((shot) => shot.shot === shotNumber);
+        if (!target?.imageUrl && !target?.sketchUrl && !target?.videoUrl) return;
+        if (!window.confirm(`Clear generated media for shot ${formatShotLabel(target)}? The prompt stays so Generate All can run it again.`)) {
+            return;
+        }
+        setShotPrompts((prev) => prev.map((shot) => (
+            shot.shot === shotNumber ? clearShotGeneratedMedia(shot) : shot
+        )));
+    };
+
+    const handleClearAllShotFrames = (shots?: ShotPrompt[]) => {
+        const targets = shots ?? storyboardVisibleShots;
+        const numbers = new Set(targets.map((shot) => shot.shot));
+        if (numbers.size === 0) return;
+        const withMedia = targets.filter((shot) => shot.imageUrl || shot.sketchUrl || shot.videoUrl);
+        if (withMedia.length === 0) {
+            setError('No generated frames to clear on the visible shots.');
+            return;
+        }
+        const scope = effectiveSceneNumber !== null ? `scene ${effectiveSceneNumber}` : 'all visible shots';
+        if (!window.confirm(`Clear generated frames/videos for ${withMedia.length} shot(s) in ${scope}? Prompts stay so Generate All can find pending work again.`)) {
+            return;
+        }
+        setShotPrompts((prev) => prev.map((shot) => (
+            numbers.has(shot.shot) ? clearShotGeneratedMedia(shot) : shot
+        )));
+    };
+
+    const handleDeleteAllStoryboardShots = () => {
+        // Scene filter: only that scene. Otherwise wipe the full list so Generate from Script returns.
+        const targets = effectiveSceneNumber !== null ? storyboardVisibleShots : shotPrompts;
+        if (targets.length === 0) return;
+        const numbers = new Set(targets.map((shot) => shot.shot));
+        const scopeLabel = effectiveSceneNumber !== null
+            ? `scene ${effectiveSceneNumber} (${targets.length} shot${targets.length === 1 ? '' : 's'})`
+            : `all ${targets.length} storyboard shot${targets.length === 1 ? '' : 's'}`;
+        if (!window.confirm(`Delete ${scopeLabel}? Prompts and generated frames will be removed so you can Generate from Script again.`)) {
+            return;
+        }
+        const remaining = renumberStoryboardShots(shotPrompts.filter((shot) => !numbers.has(shot.shot)));
+        setShotPrompts(remaining);
+        clearStoryboardFocusIfNeeded(numbers, remaining);
+        setActiveInpaintShotId(null);
+        setBurstShotNumber(null);
+        setActiveAngleShotId(null);
+        setStoryboardFocusShot(remaining[0]?.shot ?? null);
+    };
+
     const handleGenerateStoryboard = async () => {
         const scopedForFeature = directorSceneSelectionEnabled && directorSceneScope.isScoped;
         if (directorSceneSelectionEnabled && directorSceneScope.parseError) {
@@ -11907,9 +12027,9 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
         }
         const shotsToGenerate = sourceShots.filter(s => !s.imageUrl && !s.isGenerating);
         if (shotsToGenerate.length === 0) {
-            const message = "No pending shots to generate.";
+            const message = 'No pending shots to generate. Clear frames (or delete shots) first if you want Generate All to run again.';
             setError(message);
-            return { generatedCount: 0, error: message };
+            return { generatedCount: 0, error: 'No pending shots to generate.' };
         }
 
         // Cards show their own spinners; no hub-wide overlay, so the rest of the app stays usable.
@@ -17834,6 +17954,26 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                                                 <MagicWandIcon className="w-5 h-5" /> {effectiveSceneNumber !== null ? `Generate scene ${effectiveSceneNumber}` : 'Generate All Shots'}
                                             </button>
                                         )}
+                                        {storyboardVisibleShots.some((shot) => shot.imageUrl || shot.sketchUrl || shot.videoUrl) && (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleClearAllShotFrames(storyboardVisibleShots)}
+                                                className="app-button app-secondary"
+                                                title="Remove generated frames so Generate All Shots can queue them again. Prompts stay."
+                                            >
+                                                <TrashIcon className="w-4 h-4" /> {effectiveSceneNumber !== null ? `Clear scene ${effectiveSceneNumber} frames` : 'Clear All Frames'}
+                                            </button>
+                                        )}
+                                        {shotPrompts.length > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={handleDeleteAllStoryboardShots}
+                                                className="app-button app-secondary"
+                                                title="Delete storyboard shots (scene-scoped when a scene is selected) so you can Generate from Script again."
+                                            >
+                                                <TrashIcon className="w-4 h-4" /> {effectiveSceneNumber !== null ? `Delete scene ${effectiveSceneNumber} shots` : 'Delete All Shots'}
+                                            </button>
+                                        )}
                                         {canRunDirector && allowedPhaseIds.includes('director') && (() => {
                                             const sceneScoped = effectiveSceneNumber !== null && directorSceneScope.isScoped && directorSceneScope.selectedSceneNumbers.includes(effectiveSceneNumber);
                                             const running = directingScene !== null;
@@ -18281,6 +18421,26 @@ const ProjectHubWorkspace: React.FC<ProjectHubWorkspaceProps> = ({
                                                                                     {shot.imageUrl ? 'Regenerate' : 'Generate Shot'}
                                                                                 </button>
                                                                             )}
+                                                                            {(shot.imageUrl || shot.sketchUrl || shot.videoUrl) && (
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={() => handleClearShotFrame(shot.shot)}
+                                                                                    className="bg-gray-800/90 hover:bg-gray-700 text-white text-xs font-bold py-1.5 px-4 rounded-full flex items-center gap-2 pointer-events-auto"
+                                                                                    title="Clear generated media so Generate All can pick this shot up again"
+                                                                                >
+                                                                                    <TrashIcon className="w-3 h-3" />
+                                                                                    Clear Frame
+                                                                                </button>
+                                                                            )}
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => handleDeleteShot(shot.shot)}
+                                                                                className="bg-red-800/90 hover:bg-red-700 text-white text-xs font-bold py-1.5 px-4 rounded-full flex items-center gap-2 pointer-events-auto"
+                                                                                title="Remove this shot from the storyboard"
+                                                                            >
+                                                                                <TrashIcon className="w-3 h-3" />
+                                                                                Delete Shot
+                                                                            </button>
                                                                             <button
                                                                                 onClick={() => document.getElementById(shotUploadId)?.click()}
                                                                                 className="bg-gray-800/90 hover:bg-gray-700 text-white text-xs font-bold py-1.5 px-4 rounded-full flex items-center gap-2 pointer-events-auto"

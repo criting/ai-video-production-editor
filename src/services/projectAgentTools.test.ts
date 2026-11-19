@@ -166,6 +166,43 @@ test('upsertShots drops a stale continuity-refined prompt when the shot changes'
   assert.equal(upsertShots(base, [{ shot: 1, resetContinuity: true }]).shots[0].continuityRefinedPrompt, undefined);
 });
 
+test('project_new refuses to close an open project unless confirmCloseOpenProject is true', async () => {
+  let closed = false;
+  const state: ProjectAgentState = {
+    storyBible: { logline: '', characters: [], plotBeats: '', script: 'Night shift opens on the rooftop.', productionGuidelines: '' },
+    references: [],
+    shotPrompts: [{ shot: 1, prompt: 'Wide', description: 'Wide', characters: [], environment: null }],
+    projectPath: '/tmp/open-project',
+    projectName: 'Open Project',
+    activePhase: 'storyboard',
+    activeWorkspace: 'PROJECT',
+  };
+  const executor = createProjectAgentExecutor({
+    getState: () => state,
+    setStoryBible: () => undefined,
+    setReferences: () => undefined,
+    setShotPrompts: () => undefined,
+    openPhase: async () => undefined,
+    automation: async () => { throw new Error('not used'); },
+    settle: async () => undefined,
+    saveProject: async () => ({ folderPath: '/tmp/open-project', savedAt: 'now', name: 'Open Project' }),
+    saveProjectAs: async () => ({ folderPath: '/tmp/y', savedAt: 'now', name: 'Open Project' }),
+    newProject: async () => { closed = true; },
+    openProject: async () => undefined,
+    loadImage: async () => ({ base64: '', mimeType: 'image/jpeg' }),
+  });
+  await assert.rejects(
+    () => executor.project_new({}),
+    /confirmCloseOpenProject/,
+  );
+  assert.equal(closed, false);
+  const overview = await executor.project_get_overview({}) as { hint?: string };
+  assert.match(overview.hint || '', /keep working in it/i);
+  assert.doesNotMatch(overview.hint || '', /otherwise use project_new/i);
+  await executor.project_new({ confirmCloseOpenProject: true });
+  assert.equal(closed, true);
+});
+
 test('a cancelled background job stops between shots and keeps finished work', async () => {
   const { withBackgroundJobs } = await import('./projectAgentTools.ts');
   const rendered: number[] = [];
