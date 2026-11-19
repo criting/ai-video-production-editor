@@ -2,6 +2,8 @@
 
 This guide explains the main studio UI components and the recommended path from a blank script idea to generated shots, edit assembly, and final render.
 
+For vertical microdramas and episodic short-drama series specifically, prefer [Short Drama Production Guide](./short-drama-production-guide.md).
+
 Screenshots were captured from the local Pro-mode studio. Keep factual UI screenshots unedited so labels, model names, and states stay trustworthy. Use image-generation edits for genre boards, reference stills, concept art, and documentation cover art, not for screenshots that explain exact controls.
 
 ## Component Map

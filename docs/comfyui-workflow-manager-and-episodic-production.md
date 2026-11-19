@@ -6,6 +6,8 @@ This guide covers:
 2. How to use the **ComfyUI Workflow Manager**  
 3. Everything new from the recent product PRs (Electron stability, cinematic storyboard pipeline, episodic hierarchy)
 
+For the end-to-end creative playbook (hooks, continuity, storyboard Takes, multi-episode), see [Short Drama Production Guide](./short-drama-production-guide.md).
+
 ---
 
 ## 1. Fixing “ComfyUI request failed: 403 Forbidden”

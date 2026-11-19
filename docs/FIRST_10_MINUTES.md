@@ -2,6 +2,8 @@
 
 This guide is for people who just found the repository and want to open the app, understand the core workflow, and create their first generation project in under 10 minutes.
 
+Making vertical or episodic short dramas? Use the dedicated playbook: [Short Drama Production Guide](./short-drama-production-guide.md).
+
 Prefer to watch? The [4-minute video setup](https://youtu.be/p99IG1m5ybU) covers install, the welcome guide, the studio layout, project folders, and the Project Hub.
 
 ---
